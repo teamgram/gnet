@@ -25,7 +25,9 @@ package gnet
 
 import (
 	"context"
+	"net"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -34,7 +36,7 @@ import (
 )
 
 type server struct {
-	ln           *listener          // the listener for accepting new connections
+	lns          []*listener        // the listener for accepting new connections
 	lb           loadBalancer       // event-loops for handling events
 	wg           sync.WaitGroup     // event-loop close WaitGroup
 	opts         *Options           // options with server
@@ -101,23 +103,29 @@ func (svr *server) activateEventLoops(numEventLoop int) (err error) {
 	var striker *eventloop
 	// Create loops locally and bind the listeners.
 	for i := 0; i < numEventLoop; i++ {
-		ln := svr.ln
-		if i > 0 && (svr.opts.ReusePort || ln.network == "udp") {
-			if ln, err = initListener(svr.ln.network, svr.ln.addr, svr.opts); err != nil {
-				return
+		lns := make([]*listener, len(svr.lns))
+		for j, ln := range svr.lns {
+			lns[j] = ln
+			if i > 0 && (svr.opts.ReusePort || ln.network == "udp") {
+				if ln, err = initListener(svr.lns[j].network, svr.lns[j].addr, svr.opts); err != nil {
+					return
+				}
+				lns[j] = ln
 			}
 		}
 
 		var p *netpoll.Poller
 		if p, err = netpoll.OpenPoller(); err == nil {
 			el := new(eventloop)
-			el.ln = ln
+			el.lns = lns
 			el.svr = svr
 			el.poller = p
 			el.buffer = make([]byte, svr.opts.ReadBufferCap)
 			el.connections = make(map[int]*conn)
 			el.eventHandler = svr.eventHandler
-			_ = el.poller.AddRead(el.ln.packPollAttachment(el.loopAccept))
+			for _, ln := range el.lns {
+				_ = el.poller.AddRead(ln.packPollAttachment(el.loopAccept))
+			}
 			svr.lb.register(el)
 
 			// Start the ticker.
@@ -141,7 +149,7 @@ func (svr *server) activateReactors(numEventLoop int) error {
 	for i := 0; i < numEventLoop; i++ {
 		if p, err := netpoll.OpenPoller(); err == nil {
 			el := new(eventloop)
-			el.ln = svr.ln
+			el.lns = svr.lns
 			el.svr = svr
 			el.poller = p
 			el.buffer = make([]byte, svr.opts.ReadBufferCap)
@@ -158,12 +166,14 @@ func (svr *server) activateReactors(numEventLoop int) error {
 
 	if p, err := netpoll.OpenPoller(); err == nil {
 		el := new(eventloop)
-		el.ln = svr.ln
+		el.lns = svr.lns
 		el.idx = -1
 		el.svr = svr
 		el.poller = p
 		el.eventHandler = svr.eventHandler
-		_ = el.poller.AddRead(svr.ln.packPollAttachment(svr.acceptNewConnection))
+		for _, ln := range svr.lns {
+			_ = el.poller.AddRead(ln.packPollAttachment(svr.acceptNewConnection))
+		}
 		svr.mainLoop = el
 
 		// Start main reactor in background.
@@ -185,7 +195,8 @@ func (svr *server) activateReactors(numEventLoop int) error {
 }
 
 func (svr *server) start(numEventLoop int) error {
-	if svr.opts.ReusePort || svr.ln.network == "udp" {
+	// TODO:
+	if svr.opts.ReusePort || hasUdp(svr.lns) {
 		return svr.activateEventLoops(numEventLoop)
 	}
 
@@ -208,7 +219,9 @@ func (svr *server) stop(s Server) {
 	})
 
 	if svr.mainLoop != nil {
-		svr.ln.close()
+		for _, ln := range svr.lns {
+			ln.close()
+		}
 		err := svr.mainLoop.poller.UrgentTrigger(func(_ interface{}) error { return errors.ErrServerShutdown }, nil)
 		if err != nil {
 			svr.opts.Logger.Errorf("failed to call UrgentTrigger on main event-loop when stopping server")
@@ -235,7 +248,7 @@ func (svr *server) stop(s Server) {
 	atomic.StoreInt32(&svr.inShutdown, 1)
 }
 
-func serve(eventHandler EventHandler, listener *listener, options *Options, protoAddr string) error {
+func serve(eventHandler EventHandler, listeners []*listener, options *Options, protoAddrs []string) error {
 	// Figure out the proper number of event-loops/goroutines to run.
 	numEventLoop := 1
 	if options.Multicore {
@@ -248,7 +261,7 @@ func serve(eventHandler EventHandler, listener *listener, options *Options, prot
 	svr := new(server)
 	svr.opts = options
 	svr.eventHandler = eventHandler
-	svr.ln = listener
+	svr.lns = listeners
 
 	switch options.LB {
 	case RoundRobin:
@@ -270,15 +283,20 @@ func serve(eventHandler EventHandler, listener *listener, options *Options, prot
 		return options.Codec
 	}()
 
-	server := Server{
+	s := Server{
 		svr:          svr,
 		Multicore:    options.Multicore,
-		Addr:         listener.lnaddr,
+		Addrs:        make([]net.Addr, len(listeners)),
 		NumEventLoop: numEventLoop,
 		ReusePort:    options.ReusePort,
 		TCPKeepAlive: options.TCPKeepAlive,
 	}
-	switch svr.eventHandler.OnInitComplete(server) {
+
+	for i, ln := range listeners {
+		s.Addrs[i] = ln.lnaddr
+	}
+
+	switch svr.eventHandler.OnInitComplete(s) {
 	case None:
 	case Shutdown:
 		return nil
@@ -289,9 +307,9 @@ func serve(eventHandler EventHandler, listener *listener, options *Options, prot
 		svr.opts.Logger.Errorf("gnet server is stopping with error: %v", err)
 		return err
 	}
-	defer svr.stop(server)
+	defer svr.stop(s)
 
-	allServers.Store(protoAddr, svr)
+	allServers.Store(strings.Join(protoAddrs, ";"), svr)
 
 	return nil
 }

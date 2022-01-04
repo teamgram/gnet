@@ -24,6 +24,7 @@
 package gnet
 
 import (
+	"fmt"
 	"net"
 	"os"
 
@@ -50,19 +51,25 @@ type conn struct {
 	inboundBuffer  *ringbuffer.RingBuffer  // buffer for data from client
 	outboundBuffer *ringbuffer.RingBuffer  // buffer for data that is ready to write to client
 	pollAttachment *netpoll.PollAttachment // connection attachment for poller
+	connId         int64
+	id             uint16
+	debugString    string
 }
 
-func newTCPConn(fd int, el *eventloop, sa unix.Sockaddr, remoteAddr net.Addr) (c *conn) {
+func newTCPConn(fd int, lnidx int, el *eventloop, sa unix.Sockaddr, remoteAddr net.Addr) (c *conn) {
 	c = &conn{
 		fd:             fd,
 		sa:             sa,
 		loop:           el,
-		codec:          el.svr.codec,
-		localAddr:      el.ln.lnaddr,
+		codec:          el.svr.codec.Clone(),
+		localAddr:      el.lns[lnidx].lnaddr,
 		remoteAddr:     remoteAddr,
 		inboundBuffer:  prb.Get(),
 		outboundBuffer: prb.Get(),
+		id:             el.next,
+		connId:         int64(el.idx)<<48 | int64(el.next)<<32 | int64(fd),
 	}
+	el.next = el.next + 1
 	c.pollAttachment = netpoll.GetPollAttachment()
 	c.pollAttachment.FD, c.pollAttachment.Callback = fd, c.handleEvents
 	return
@@ -73,6 +80,7 @@ func (c *conn) releaseTCP() {
 	c.sa = nil
 	c.ctx = nil
 	c.buffer = nil
+	c.codec = nil
 	c.localAddr = nil
 	c.remoteAddr = nil
 	prb.Put(c.inboundBuffer)
@@ -84,13 +92,17 @@ func (c *conn) releaseTCP() {
 	netpoll.PutPollAttachment(c.pollAttachment)
 }
 
-func newUDPConn(fd int, el *eventloop, sa unix.Sockaddr) *conn {
-	return &conn{
+func newUDPConn(fd int, lnidx int, el *eventloop, sa unix.Sockaddr) *conn {
+	c := &conn{
 		fd:         fd,
 		sa:         sa,
-		localAddr:  el.ln.lnaddr,
+		localAddr:  el.lns[lnidx].lnaddr,
 		remoteAddr: socket.SockaddrToUDPAddr(sa),
+		id:         el.next,
+		connId:     int64(el.idx)<<48 | int64(el.next)<<32 | int64(fd),
 	}
+	el.next = el.next + 1
+	return c
 }
 
 func (c *conn) releaseUDP() {
@@ -111,13 +123,13 @@ func (c *conn) open(buf []byte) {
 	}
 }
 
-func (c *conn) read() ([]byte, error) {
+func (c *conn) read() (interface{}, error) {
 	return c.codec.Decode(c)
 }
 
-func (c *conn) write(buf []byte) (err error) {
+func (c *conn) write(msg interface{}) (err error) {
 	var outFrame []byte
-	if outFrame, err = c.codec.Encode(c, buf); err != nil {
+	if outFrame, err = c.codec.Encode(c, msg); err != nil {
 		return
 	}
 	// If there is pending data in outbound buffer, the current data ought to be appended to the outbound buffer
@@ -149,7 +161,7 @@ func (c *conn) asyncWrite(itf interface{}) error {
 	if !c.opened {
 		return nil
 	}
-	return c.write(itf.([]byte))
+	return c.write(itf)
 }
 
 func (c *conn) sendTo(buf []byte) error {
@@ -251,3 +263,19 @@ func (c *conn) Context() interface{}       { return c.ctx }
 func (c *conn) SetContext(ctx interface{}) { c.ctx = ctx }
 func (c *conn) LocalAddr() net.Addr        { return c.localAddr }
 func (c *conn) RemoteAddr() net.Addr       { return c.remoteAddr }
+
+func (c *conn) ConnID() int64 { return c.connId }
+
+func (c *conn) DebugString() string {
+	if c.debugString == "" {
+		c.debugString = fmt.Sprintf("%d@(%s->%s)", c.connId, c.remoteAddr.String(), c.localAddr.String())
+	}
+	return c.debugString
+}
+
+func (c *conn) UnThreadSafeWrite(msg interface{}) (err error) {
+	if c.opened {
+		err = c.write(msg)
+	}
+	return
+}

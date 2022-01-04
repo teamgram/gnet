@@ -36,9 +36,11 @@ type (
 	// ICodec is the interface of gnet codec.
 	ICodec interface {
 		// Encode encodes frames upon server responses into TCP stream.
-		Encode(c Conn, buf []byte) ([]byte, error)
+		Encode(c Conn, msg interface{}) ([]byte, error)
 		// Decode decodes frames from TCP stream via specific implementation.
-		Decode(c Conn) ([]byte, error)
+		Decode(c Conn) (interface{}, error)
+		// Clone Clone
+		Clone() ICodec
 	}
 
 	// BuiltInFrameCodec is the built-in codec which will be assigned to gnet server when customized codec is not set up.
@@ -67,12 +69,12 @@ type (
 )
 
 // Encode ...
-func (cc *BuiltInFrameCodec) Encode(c Conn, buf []byte) ([]byte, error) {
-	return buf, nil
+func (cc *BuiltInFrameCodec) Encode(c Conn, msg interface{}) ([]byte, error) {
+	return msg.([]byte), nil
 }
 
 // Decode ...
-func (cc *BuiltInFrameCodec) Decode(c Conn) ([]byte, error) {
+func (cc *BuiltInFrameCodec) Decode(c Conn) (interface{}, error) {
 	buf := c.Read()
 	if len(buf) == 0 {
 		return nil, nil
@@ -81,13 +83,18 @@ func (cc *BuiltInFrameCodec) Decode(c Conn) ([]byte, error) {
 	return buf, nil
 }
 
+// Clone ...
+func (cc *BuiltInFrameCodec) Clone() ICodec {
+	return cc
+}
+
 // Encode ...
-func (cc *LineBasedFrameCodec) Encode(c Conn, buf []byte) ([]byte, error) {
-	return append(buf, CRLFByte), nil
+func (cc *LineBasedFrameCodec) Encode(c Conn, msg interface{}) ([]byte, error) {
+	return append(msg.([]byte), CRLFByte), nil
 }
 
 // Decode ...
-func (cc *LineBasedFrameCodec) Decode(c Conn) ([]byte, error) {
+func (cc *LineBasedFrameCodec) Decode(c Conn) (interface{}, error) {
 	buf := c.Read()
 	idx := bytes.IndexByte(buf, CRLFByte)
 	if idx == -1 {
@@ -97,18 +104,23 @@ func (cc *LineBasedFrameCodec) Decode(c Conn) ([]byte, error) {
 	return buf[:idx], nil
 }
 
+// Clone ...
+func (cc *LineBasedFrameCodec) Clone() ICodec {
+	return cc
+}
+
 // NewDelimiterBasedFrameCodec instantiates and returns a codec with a specific delimiter.
 func NewDelimiterBasedFrameCodec(delimiter byte) *DelimiterBasedFrameCodec {
 	return &DelimiterBasedFrameCodec{delimiter}
 }
 
 // Encode ...
-func (cc *DelimiterBasedFrameCodec) Encode(c Conn, buf []byte) ([]byte, error) {
-	return append(buf, cc.delimiter), nil
+func (cc *DelimiterBasedFrameCodec) Encode(c Conn, msg interface{}) ([]byte, error) {
+	return append(msg.([]byte), cc.delimiter), nil
 }
 
 // Decode ...
-func (cc *DelimiterBasedFrameCodec) Decode(c Conn) ([]byte, error) {
+func (cc *DelimiterBasedFrameCodec) Decode(c Conn) (interface{}, error) {
 	buf := c.Read()
 	idx := bytes.IndexByte(buf, cc.delimiter)
 	if idx == -1 {
@@ -118,13 +130,19 @@ func (cc *DelimiterBasedFrameCodec) Decode(c Conn) ([]byte, error) {
 	return buf[:idx], nil
 }
 
+// Clone ...
+func (cc *DelimiterBasedFrameCodec) Clone() ICodec {
+	return cc
+}
+
 // NewFixedLengthFrameCodec instantiates and returns a codec with fixed length.
 func NewFixedLengthFrameCodec(frameLength int) *FixedLengthFrameCodec {
 	return &FixedLengthFrameCodec{frameLength}
 }
 
 // Encode ...
-func (cc *FixedLengthFrameCodec) Encode(c Conn, buf []byte) ([]byte, error) {
+func (cc *FixedLengthFrameCodec) Encode(c Conn, msg interface{}) ([]byte, error) {
+	buf := msg.([]byte)
 	if len(buf)%cc.frameLength != 0 {
 		return nil, errorset.ErrInvalidFixedLength
 	}
@@ -132,13 +150,18 @@ func (cc *FixedLengthFrameCodec) Encode(c Conn, buf []byte) ([]byte, error) {
 }
 
 // Decode ...
-func (cc *FixedLengthFrameCodec) Decode(c Conn) ([]byte, error) {
+func (cc *FixedLengthFrameCodec) Decode(c Conn) (interface{}, error) {
 	size, buf := c.ReadN(cc.frameLength)
 	if size == 0 {
 		return nil, errorset.ErrUnexpectedEOF
 	}
 	c.ShiftN(size)
 	return buf, nil
+}
+
+// Clone ...
+func (cc *FixedLengthFrameCodec) Clone() ICodec {
+	return cc
 }
 
 // NewLengthFieldBasedFrameCodec instantiates and returns a codec based on the length field.
@@ -176,7 +199,8 @@ type DecoderConfig struct {
 }
 
 // Encode ...
-func (cc *LengthFieldBasedFrameCodec) Encode(c Conn, buf []byte) (out []byte, err error) {
+func (cc *LengthFieldBasedFrameCodec) Encode(c Conn, msg interface{}) (out []byte, err error) {
+	buf := msg.([]byte)
 	length := len(buf) + cc.encoderConfig.LengthAdjustment
 	if cc.encoderConfig.LengthIncludesLengthFieldLength {
 		length += cc.encoderConfig.LengthFieldLength
@@ -235,7 +259,7 @@ func (in *innerBuffer) readN(n int) (buf []byte, err error) {
 }
 
 // Decode ...
-func (cc *LengthFieldBasedFrameCodec) Decode(c Conn) ([]byte, error) {
+func (cc *LengthFieldBasedFrameCodec) Decode(c Conn) (interface{}, error) {
 	var (
 		in     innerBuffer
 		header []byte
@@ -326,4 +350,9 @@ func writeUint24(byteOrder binary.ByteOrder, v int) []byte {
 		b[0] = byte(v >> 16)
 	}
 	return b
+}
+
+// Clone ...
+func (cc *LengthFieldBasedFrameCodec) Clone() ICodec {
+	return cc
 }

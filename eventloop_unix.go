@@ -50,8 +50,9 @@ type eventloop struct {
 
 //nolint:structcheck
 type internalEventloop struct {
-	ln           *listener       // listener
-	idx          int             // loop index in the server loops list
+	lns          []*listener // listener
+	idx          int         // loop index in the server loops list
+	next         uint16
 	svr          *server         // server in loop
 	poller       *netpoll.Poller // epoll or kqueue
 	buffer       []byte          // read packet buffer whose capacity is 64KB
@@ -282,7 +283,7 @@ func (el *eventloop) handleAction(c *conn, action Action) error {
 	}
 }
 
-func (el *eventloop) loopReadUDP(fd int) error {
+func (el *eventloop) loopReadUDP(fd, lnidx int) error {
 	n, sa, err := unix.Recvfrom(fd, el.buffer, 0)
 	if err != nil {
 		if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
@@ -292,11 +293,12 @@ func (el *eventloop) loopReadUDP(fd int) error {
 			fd, el.idx, os.NewSyscallError("recvfrom", err))
 	}
 
-	c := newUDPConn(fd, el, sa)
+	c := newUDPConn(fd, lnidx, el, sa)
 	out, action := el.eventHandler.React(el.buffer[:n], c)
 	if out != nil {
 		el.eventHandler.PreWrite()
-		_ = c.sendTo(out)
+		// TODO: bug
+		_ = c.sendTo(out.([]byte))
 	}
 	if action == Shutdown {
 		return gerrors.ErrServerShutdown

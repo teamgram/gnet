@@ -60,7 +60,7 @@ type Server struct {
 
 	// The Addr parameter is the listening address that align
 	// with the addr string passed to the Serve function.
-	Addr net.Addr
+	Addrs []net.Addr
 
 	// NumEventLoop is the number of event-loops that the server is using.
 	NumEventLoop int
@@ -81,15 +81,76 @@ func (s Server) CountConnections() (count int) {
 	return
 }
 
+// DupFds
 // DupFd returns a copy of the underlying file descriptor of listener.
 // It is the caller's responsibility to close dupFD when finished.
 // Closing listener does not affect dupFD, and closing dupFD does not affect listener.
-func (s Server) DupFd() (dupFD int, err error) {
-	dupFD, sc, err := s.svr.ln.dup()
-	if err != nil {
-		logging.Warnf("%s failed when duplicating new fd\n", sc)
+func (s Server) DupFds() (dupFDs []int, err error) {
+	for _, ln := range s.svr.lns {
+		dupFD, sc, err := ln.dup()
+		if err != nil {
+			logging.Warnf("%s failed when duplicating new fd\n", sc)
+		}
+		dupFDs = append(dupFDs, dupFD)
 	}
 	return
+}
+
+// AddrsString AddrsString
+func (s *Server) AddrsString() string {
+	var addrs []string
+	for _, addr := range s.Addrs {
+		addrs = append(addrs, addr.String())
+	}
+	return strings.Join(addrs, ", ")
+}
+
+// AsyncWrite
+func (s *Server) AsyncWrite(connId int64, msg interface{}) {
+	elidx := int(connId >> 48 & 0xffff)
+	id := uint16(connId >> 32 & 0xffff)
+	fd := int(connId & 0xffffffff)
+
+	s.svr.lb.iterate(func(i int, el *eventloop) bool {
+		if i == elidx {
+			_ = el.poller.Trigger(func(_ interface{}) error {
+				if c, ok := el.connections[fd]; ok && c.id == id {
+					if !c.opened {
+						return nil
+					}
+					c.write(msg)
+				}
+				return nil
+			}, nil)
+			return false
+		}
+		return true
+	})
+}
+
+func (s *Server) Trigger(connId int64, cb func(c Conn)) {
+	if cb == nil {
+		return
+	}
+
+	elidx := int(connId >> 48 & 0xffff)
+	id := uint16(connId >> 32 & 0xffff)
+	fd := int(connId & 0xffffffff)
+
+	s.svr.lb.iterate(func(i int, el *eventloop) bool {
+		if i == elidx {
+			_ = el.poller.Trigger(func(_ interface{}) error {
+				if c, ok := el.connections[fd]; ok && id == c.id {
+					if c.opened {
+						cb(c)
+					}
+				}
+				return nil
+			}, nil)
+			return false
+		}
+		return true
+	})
 }
 
 // Conn is a interface of gnet connection.
@@ -142,6 +203,15 @@ type Conn interface {
 
 	// Close closes the current connection.
 	Close() error
+
+	// ConnID ConnID
+	ConnID() int64
+
+	// DebugString DebugString
+	DebugString() string
+
+	// UnThreadSafeWrite UnThreadSafeWrite
+	UnThreadSafeWrite(msg interface{}) error
 }
 
 type (
@@ -176,7 +246,7 @@ type (
 		// React fires when a connection sends the server data.
 		// Call c.Read() or c.ReadN(n) within the parameter:c to read incoming data from client.
 		// Parameter:out is the return value which is going to be sent back to the client.
-		React(frame []byte, c Conn) (out []byte, action Action)
+		React(frame interface{}, c Conn) (out interface{}, action Action)
 
 		// Tick fires immediately after the server starts and will fire again
 		// following the duration specified by the delay return value.
@@ -221,7 +291,7 @@ func (es *EventServer) PreWrite() {
 // React fires when a connection sends the server data.
 // Call c.Read() or c.ReadN(n) within the parameter:c to read incoming data from client.
 // Parameter:out is the return value which is going to be sent back to the client.
-func (es *EventServer) React(frame []byte, c Conn) (out []byte, action Action) {
+func (es *EventServer) React(frame interface{}, c Conn) (out interface{}, action Action) {
 	return
 }
 
@@ -245,7 +315,7 @@ func (es *EventServer) Tick() (delay time.Duration, action Action) {
 //  unix  - Unix Domain Socket
 //
 // The "tcp" network scheme is assumed when one is not specified.
-func Serve(eventHandler EventHandler, protoAddr string, opts ...Option) (err error) {
+func Serve(eventHandler EventHandler, protoAddrs []string, opts ...Option) (err error) {
 	options := loadOptions(opts...)
 
 	logging.Debugf("default logging level is %s", logging.LogLevel())
@@ -285,15 +355,25 @@ func Serve(eventHandler EventHandler, protoAddr string, opts ...Option) (err err
 		options.ReadBufferCap = internal.CeilToPowerOfTwo(rbc)
 	}
 
-	network, addr := parseProtoAddr(protoAddr)
+	var lns []*listener
 
-	var ln *listener
-	if ln, err = initListener(network, addr, options); err != nil {
-		return
+	for _, protoAddr := range protoAddrs {
+		network, addr := parseProtoAddr(protoAddr)
+
+		var ln *listener
+		if ln, err = initListener(network, addr, options); err != nil {
+			return
+		}
+		lns = append(lns, ln)
 	}
-	defer ln.close()
 
-	return serve(eventHandler, ln, options, protoAddr)
+	defer func() {
+		for _, ln := range lns {
+			ln.close()
+		}
+	}()
+
+	return serve(eventHandler, lns, options, protoAddrs)
 }
 
 var (
@@ -330,6 +410,12 @@ func Stop(ctx context.Context, protoAddr string) error {
 			return ctx.Err()
 		case <-ticker.C:
 		}
+	}
+}
+
+func StopServer(protoAddrs []string) {
+	for _, protoAddr := range protoAddrs {
+		Stop(context.Background(), protoAddr)
 	}
 }
 

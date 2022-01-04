@@ -77,8 +77,8 @@ func TestLengthFieldBasedFrameCodecWith1(t *testing.T) {
 	c := &mockConn{buf: out}
 	if res, err := codec.Decode(c); err != nil {
 		t.Fatalf("decode data with error: %v\n", err)
-	} else if !bytes.Equal(res, data) {
-		t.Fatalf("decoded data(%s) shoule be equal to the original data(%s)\n", string(res), string(data))
+	} else if !bytes.Equal(res.([]byte), data) {
+		t.Fatalf("decoded data(%s) shoule be equal to the original data(%s)\n", string(res.([]byte)), string(data))
 	}
 
 	encoderConfig.ByteOrder = binary.LittleEndian
@@ -94,8 +94,8 @@ func TestLengthFieldBasedFrameCodecWith1(t *testing.T) {
 	c.buf = out
 	if res, err := codec.Decode(c); err != nil {
 		t.Fatalf("decode data with error: %v\n", err)
-	} else if !bytes.Equal(res, data) {
-		t.Fatalf("decoded data(%s) shoule be equal to original data(%s)\n", string(res), string(data))
+	} else if !bytes.Equal(res.([]byte), data) {
+		t.Fatalf("decoded data(%s) shoule be equal to original data(%s)\n", string(res.([]byte)), string(data))
 	}
 }
 
@@ -136,8 +136,8 @@ func TestLengthFieldBasedFrameCodecWith2(t *testing.T) {
 	c := &mockConn{buf: out}
 	if res, err := codec.Decode(c); err != nil {
 		t.Fatalf("decode data with error: %v\n", err)
-	} else if !bytes.Equal(res, data) {
-		t.Fatalf("decoded data(%s) shoule be equal to the original data(%s)\n", string(res), string(data))
+	} else if !bytes.Equal(res.([]byte), data) {
+		t.Fatalf("decoded data(%s) shoule be equal to the original data(%s)\n", string(res.([]byte)), string(data))
 	}
 
 	encoderConfig.ByteOrder = binary.LittleEndian
@@ -155,8 +155,8 @@ func TestLengthFieldBasedFrameCodecWith2(t *testing.T) {
 	c.buf = out
 	if res, err := codec.Decode(c); err != nil {
 		t.Fatalf("decode data with error: %v\n", err)
-	} else if !bytes.Equal(res, data) {
-		t.Fatalf("decoded data(%s) shoule be equal to original data(%s)\n", string(res), string(data))
+	} else if !bytes.Equal(res.([]byte), data) {
+		t.Fatalf("decoded data(%s) shoule be equal to original data(%s)\n", string(res.([]byte)), string(data))
 	}
 }
 
@@ -197,8 +197,8 @@ func TestLengthFieldBasedFrameCodecWith3(t *testing.T) {
 	c := &mockConn{buf: out}
 	if res, err := codec.Decode(c); err != nil {
 		t.Fatalf("decode data with error: %v\n", err)
-	} else if !bytes.Equal(res, data) {
-		t.Fatalf("decoded data(%s) shoule be equal to the original data(%s)\n", string(res), string(data))
+	} else if !bytes.Equal(res.([]byte), data) {
+		t.Fatalf("decoded data(%s) shoule be equal to the original data(%s)\n", string(res.([]byte)), string(data))
 	}
 
 	encoderConfig.ByteOrder = binary.LittleEndian
@@ -216,8 +216,8 @@ func TestLengthFieldBasedFrameCodecWith3(t *testing.T) {
 	c.buf = out
 	if res, err := codec.Decode(c); err != nil {
 		t.Fatalf("decode data with error: %v\n", err)
-	} else if !bytes.Equal(res, data) {
-		t.Fatalf("decoded data(%s) shoule be equal to original data(%s)\n", string(res), string(data))
+	} else if !bytes.Equal(res.([]byte), data) {
+		t.Fatalf("decoded data(%s) shoule be equal to original data(%s)\n", string(res.([]byte)), string(data))
 	}
 
 	buf := make([]byte, 3)
@@ -263,8 +263,8 @@ func TestLengthFieldBasedFrameCodecWith8(t *testing.T) {
 	c := &mockConn{buf: out}
 	if res, err := codec.Decode(c); err != nil {
 		t.Fatalf("decode data with error: %v\n", err)
-	} else if !bytes.Equal(res, data) {
-		t.Fatalf("decoded data(%s) shoule be equal to the original data(%s)\n", string(res), string(data))
+	} else if !bytes.Equal(res.([]byte), data) {
+		t.Fatalf("decoded data(%s) shoule be equal to the original data(%s)\n", string(res.([]byte)), string(data))
 	}
 
 	encoderConfig.ByteOrder = binary.LittleEndian
@@ -282,8 +282,8 @@ func TestLengthFieldBasedFrameCodecWith8(t *testing.T) {
 	c.buf = out
 	if res, err := codec.Decode(c); err != nil {
 		t.Fatalf("decode data with error: %v\n", err)
-	} else if !bytes.Equal(res, data) {
-		t.Fatalf("decoded data(%s) shoule be equal to original data(%s)\n", string(res), string(data))
+	} else if !bytes.Equal(res.([]byte), data) {
+		t.Fatalf("decoded data(%s) shoule be equal to original data(%s)\n", string(res.([]byte)), string(data))
 	}
 }
 
@@ -316,8 +316,8 @@ func TestLengthFieldBasedFrameCodecZeroPlayLoad(t *testing.T) {
 	res, err := codec.Decode(&mockConn{buf: out})
 	if err != nil {
 		t.Fatalf("decode error with error: %v\n", err)
-	} else if len(res) != 0 {
-		t.Fatalf("decoded data should be empty, but got: %s\n", string(res[4:]))
+	} else if len(res.([]byte)) != 0 {
+		t.Fatalf("decoded data should be empty, but got: %s\n", string(res.([]byte)[4:]))
 	}
 }
 
