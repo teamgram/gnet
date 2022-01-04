@@ -17,7 +17,6 @@
 
 package gnet
 
-/*
 import (
 	"context"
 	"errors"
@@ -70,13 +69,13 @@ func NewClient(eventHandler EventHandler, opts ...Option) (cli *Client, err erro
 	svr := new(server)
 	svr.opts = options
 	svr.eventHandler = eventHandler
-	svr.ln = &listener{network: "udp"}
+	svr.lns = []*listener{&listener{network: "udp"}}
 	svr.cond = sync.NewCond(&sync.Mutex{})
 	if options.Ticker {
 		svr.tickerCtx, svr.cancelTicker = context.WithCancel(context.Background())
 	}
 	el := new(eventloop)
-	el.ln = svr.ln
+	el.lns = svr.lns
 	el.svr = svr
 	el.poller = p
 	if rbc := options.ReadBufferCap; rbc <= 0 {
@@ -208,4 +207,3 @@ func (cli *Client) Dial(network, address string) (Conn, error) {
 	}
 	return gc, nil
 }
-*/

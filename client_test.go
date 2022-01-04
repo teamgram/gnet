@@ -17,7 +17,6 @@
 
 package gnet
 
-/*
 import (
 	"encoding/binary"
 	"math/rand"
@@ -307,7 +306,7 @@ func testCodecServeWithGnetClient(
 	assert.NoError(t, err)
 	err = Serve(
 		ts,
-		network+"://"+addr,
+		[]string{network + "://" + addr},
 		WithMulticore(multicore),
 		WithTicker(true),
 		WithLogLevel(logging.DebugLevel),
@@ -588,7 +587,7 @@ func testServeWithGnetClient(t *testing.T, network, addr string, reuseport, reus
 	err = ts.client.Start()
 	assert.NoError(t, err)
 	err = Serve(ts,
-		network+"://"+addr,
+		[]string{network + "://" + addr},
 		WithLockOSThread(async),
 		WithMulticore(multicore),
 		WithReusePort(reuseport),
@@ -657,4 +656,3 @@ func startGnetClient(t *testing.T, cli *Client, ev *clientEvents, network, addr 
 		}
 	}
 }
-*/
