@@ -171,10 +171,6 @@ func (svr *server) activateReactors(numEventLoop int) error {
 		el.eventHandler = svr.eventHandler
 		for _, ln := range svr.lns {
 			_ = el.poller.AddRead(ln.packPollAttachment(svr.accept))
-			//=======
-			//		if err = el.poller.AddRead(svr.ln.packPollAttachment(svr.accept)); err != nil {
-			//			return err
-			//>>>>>>> master
 		}
 		svr.mainLoop = el
 
