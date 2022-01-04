@@ -17,6 +17,7 @@
 
 package gnet
 
+/*
 import (
 	"context"
 	"errors"
@@ -207,3 +208,4 @@ func (cli *Client) Dial(network, address string) (Conn, error) {
 	}
 	return gc, nil
 }
+*/

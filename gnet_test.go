@@ -196,10 +196,10 @@ func (s *testCodecServer) OnClosed(c Conn, err error) (action Action) {
 	return
 }
 
-func (s *testCodecServer) React(packet []byte, c Conn) (out []byte, action Action) {
+func (s *testCodecServer) React(packet interface{}, c Conn) (out interface{}, action Action) {
 	if s.async {
 		if packet != nil {
-			data := append([]byte{}, packet...)
+			data := append([]byte{}, packet.([]byte)...)
 			_ = s.workerPool.Submit(func() {
 				_ = c.AsyncWrite(data)
 			})
@@ -555,10 +555,10 @@ func (s *testServer) OnClosed(c Conn, err error) (action Action) {
 	return
 }
 
-func (s *testServer) React(packet []byte, c Conn) (out []byte, action Action) {
+func (s *testServer) React(packet interface{}, c Conn) (out interface{}, action Action) {
 	if s.async {
 		buf := bbPool.Get()
-		_, _ = buf.Write(packet)
+		_, _ = buf.Write(packet.([]byte))
 
 		if s.network == "tcp" || s.network == "unix" {
 			// just for test
@@ -758,7 +758,7 @@ func (t *testWakeConnServer) OnClosed(c Conn, err error) (action Action) {
 	return
 }
 
-func (t *testWakeConnServer) React(packet []byte, c Conn) (out []byte, action Action) {
+func (t *testWakeConnServer) React(packet interface{}, c Conn) (out interface{}, action Action) {
 	out = []byte("Waking up.")
 	action = -1
 	return
@@ -860,7 +860,7 @@ func (t *testCloseActionErrorServer) OnClosed(c Conn, err error) (action Action)
 	return
 }
 
-func (t *testCloseActionErrorServer) React(packet []byte, c Conn) (out []byte, action Action) {
+func (t *testCloseActionErrorServer) React(packet interface{}, c Conn) (out interface{}, action Action) {
 	out = packet
 	action = Close
 	return
@@ -902,7 +902,7 @@ type testShutdownActionErrorServer struct {
 	action        bool
 }
 
-func (t *testShutdownActionErrorServer) React(packet []byte, c Conn) (out []byte, action Action) {
+func (t *testShutdownActionErrorServer) React(packet interface{}, c Conn) (out interface{}, action Action) {
 	c.ReadN(-1) // just for test
 	out = packet
 	action = Shutdown
@@ -1030,7 +1030,7 @@ type testUDPShutdownServer struct {
 	tick    bool
 }
 
-func (t *testUDPShutdownServer) React(packet []byte, c Conn) (out []byte, action Action) {
+func (t *testUDPShutdownServer) React(packet interface{}, c Conn) (out interface{}, action Action) {
 	out = packet
 	action = Shutdown
 	return
@@ -1078,7 +1078,7 @@ func (t *testCloseConnectionServer) OnClosed(c Conn, err error) (action Action) 
 	return
 }
 
-func (t *testCloseConnectionServer) React(packet []byte, c Conn) (out []byte, action Action) {
+func (t *testCloseConnectionServer) React(packet interface{}, c Conn) (out interface{}, action Action) {
 	out = packet
 	go func() {
 		time.Sleep(time.Second)
@@ -1135,7 +1135,7 @@ func (t *testStopServer) OnClosed(c Conn, err error) (action Action) {
 	return
 }
 
-func (t *testStopServer) React(packet []byte, c Conn) (out []byte, action Action) {
+func (t *testStopServer) React(packet interface{}, c Conn) (out interface{}, action Action) {
 	out = packet
 	return
 }
@@ -1156,7 +1156,9 @@ func (t *testStopServer) Tick() (delay time.Duration, action Action) {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
-				logging.Debugf("stop server...", Stop(ctx, []string{t.protoAddr}))
+				_ = ctx
+				StopServer([]string{t.protoAddr})
+				logging.Debugf("stop server...")
 			}()
 
 			// waiting the server shutdown.
@@ -1213,13 +1215,14 @@ func (tes *testClosedWakeUpServer) OnInitComplete(_ Server) (action Action) {
 		close(tes.clientClosed)
 		<-tes.serverClosed
 
-		logging.Debugf("stop server...", Stop(context.TODO(), []string{tes.protoAddr}))
+		StopServer([]string{tes.protoAddr})
+		logging.Debugf("stop server...")
 	}()
 
 	return None
 }
 
-func (tes *testClosedWakeUpServer) React(_ []byte, conn Conn) ([]byte, Action) {
+func (tes *testClosedWakeUpServer) React(_ interface{}, conn Conn) (interface{}, Action) {
 	require.NotNil(tes.tester, conn.RemoteAddr())
 
 	select {

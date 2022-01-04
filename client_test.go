@@ -17,6 +17,7 @@
 
 package gnet
 
+/*
 import (
 	"encoding/binary"
 	"math/rand"
@@ -656,3 +657,4 @@ func startGnetClient(t *testing.T, cli *Client, ev *clientEvents, network, addr 
 		}
 	}
 }
+*/
