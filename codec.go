@@ -1,22 +1,16 @@
 // Copyright (c) 2019 Andy Pan
 //
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package gnet
 
@@ -26,7 +20,7 @@ import (
 	"errors"
 	"fmt"
 
-	errorset "github.com/panjf2000/gnet/errors"
+	gerrors "github.com/panjf2000/gnet/pkg/errors"
 )
 
 // CRLFByte represents a byte of CRLF.
@@ -38,6 +32,10 @@ type (
 		// Encode encodes frames upon server responses into TCP stream.
 		Encode(c Conn, msg interface{}) ([]byte, error)
 		// Decode decodes frames from TCP stream via specific implementation.
+		//
+		// Note that when there is an incomplete packet, you should return (nil, ErrIncompletePacket)
+		// to make gnet continue reading data from socket, otherwise, any error other than ErrIncompletePacket
+		// will cause the connection to close.
 		Decode(c Conn) (interface{}, error)
 		// Clone Clone
 		Clone() ICodec
@@ -77,7 +75,7 @@ func (cc *BuiltInFrameCodec) Encode(c Conn, msg interface{}) ([]byte, error) {
 func (cc *BuiltInFrameCodec) Decode(c Conn) (interface{}, error) {
 	buf := c.Read()
 	if len(buf) == 0 {
-		return nil, nil
+		return nil, gerrors.ErrIncompletePacket
 	}
 	c.ResetBuffer()
 	return buf, nil
@@ -98,7 +96,7 @@ func (cc *LineBasedFrameCodec) Decode(c Conn) (interface{}, error) {
 	buf := c.Read()
 	idx := bytes.IndexByte(buf, CRLFByte)
 	if idx == -1 {
-		return nil, errorset.ErrCRLFNotFound
+		return nil, gerrors.ErrIncompletePacket
 	}
 	c.ShiftN(idx + 1)
 	return buf[:idx], nil
@@ -124,7 +122,7 @@ func (cc *DelimiterBasedFrameCodec) Decode(c Conn) (interface{}, error) {
 	buf := c.Read()
 	idx := bytes.IndexByte(buf, cc.delimiter)
 	if idx == -1 {
-		return nil, errorset.ErrDelimiterNotFound
+		return nil, gerrors.ErrIncompletePacket
 	}
 	c.ShiftN(idx + 1)
 	return buf[:idx], nil
@@ -144,7 +142,7 @@ func NewFixedLengthFrameCodec(frameLength int) *FixedLengthFrameCodec {
 func (cc *FixedLengthFrameCodec) Encode(c Conn, msg interface{}) ([]byte, error) {
 	buf := msg.([]byte)
 	if len(buf)%cc.frameLength != 0 {
-		return nil, errorset.ErrInvalidFixedLength
+		return nil, gerrors.ErrInvalidFixedLength
 	}
 	return buf, nil
 }
@@ -152,8 +150,8 @@ func (cc *FixedLengthFrameCodec) Encode(c Conn, msg interface{}) ([]byte, error)
 // Decode ...
 func (cc *FixedLengthFrameCodec) Decode(c Conn) (interface{}, error) {
 	size, buf := c.ReadN(cc.frameLength)
-	if size == 0 {
-		return nil, errorset.ErrUnexpectedEOF
+	if size != cc.frameLength {
+		return nil, gerrors.ErrIncompletePacket
 	}
 	c.ShiftN(size)
 	return buf, nil
@@ -207,7 +205,7 @@ func (cc *LengthFieldBasedFrameCodec) Encode(c Conn, msg interface{}) (out []byt
 	}
 
 	if length < 0 {
-		return nil, errorset.ErrTooLessLength
+		return nil, gerrors.ErrTooLessLength
 	}
 
 	switch cc.encoderConfig.LengthFieldLength {
@@ -234,7 +232,7 @@ func (cc *LengthFieldBasedFrameCodec) Encode(c Conn, msg interface{}) (out []byt
 		out = make([]byte, 8)
 		cc.encoderConfig.ByteOrder.PutUint64(out, uint64(length))
 	default:
-		return nil, errorset.ErrUnsupportedLength
+		return nil, gerrors.ErrUnsupportedLength
 	}
 
 	out = append(out, buf...)
@@ -269,20 +267,23 @@ func (cc *LengthFieldBasedFrameCodec) Decode(c Conn) (interface{}, error) {
 	if cc.decoderConfig.LengthFieldOffset > 0 { // discard header(offset)
 		header, err = in.readN(cc.decoderConfig.LengthFieldOffset)
 		if err != nil {
-			return nil, errorset.ErrUnexpectedEOF
+			return nil, gerrors.ErrIncompletePacket
 		}
 	}
 
 	lenBuf, frameLength, err := cc.getUnadjustedFrameLength(&in)
 	if err != nil {
-		return nil, err
+		if err == gerrors.ErrUnsupportedLength {
+			return nil, err
+		}
+		return nil, gerrors.ErrIncompletePacket
 	}
 
 	// real message length
 	msgLength := int(frameLength) + cc.decoderConfig.LengthAdjustment
 	msg, err := in.readN(msgLength)
 	if err != nil {
-		return nil, errorset.ErrUnexpectedEOF
+		return nil, gerrors.ErrIncompletePacket
 	}
 
 	fullMessage := make([]byte, len(header)+len(lenBuf)+msgLength)
@@ -298,35 +299,35 @@ func (cc *LengthFieldBasedFrameCodec) getUnadjustedFrameLength(in *innerBuffer) 
 	case 1:
 		b, err := in.readN(1)
 		if err != nil {
-			return nil, 0, errorset.ErrUnexpectedEOF
+			return nil, 0, gerrors.ErrUnexpectedEOF
 		}
 		return b, uint64(b[0]), nil
 	case 2:
 		lenBuf, err := in.readN(2)
 		if err != nil {
-			return nil, 0, errorset.ErrUnexpectedEOF
+			return nil, 0, gerrors.ErrUnexpectedEOF
 		}
 		return lenBuf, uint64(cc.decoderConfig.ByteOrder.Uint16(lenBuf)), nil
 	case 3:
 		lenBuf, err := in.readN(3)
 		if err != nil {
-			return nil, 0, errorset.ErrUnexpectedEOF
+			return nil, 0, gerrors.ErrUnexpectedEOF
 		}
 		return lenBuf, readUint24(cc.decoderConfig.ByteOrder, lenBuf), nil
 	case 4:
 		lenBuf, err := in.readN(4)
 		if err != nil {
-			return nil, 0, errorset.ErrUnexpectedEOF
+			return nil, 0, gerrors.ErrUnexpectedEOF
 		}
 		return lenBuf, uint64(cc.decoderConfig.ByteOrder.Uint32(lenBuf)), nil
 	case 8:
 		lenBuf, err := in.readN(8)
 		if err != nil {
-			return nil, 0, errorset.ErrUnexpectedEOF
+			return nil, 0, gerrors.ErrUnexpectedEOF
 		}
 		return lenBuf, cc.decoderConfig.ByteOrder.Uint64(lenBuf), nil
 	default:
-		return nil, 0, errorset.ErrUnsupportedLength
+		return nil, 0, gerrors.ErrUnsupportedLength
 	}
 }
 

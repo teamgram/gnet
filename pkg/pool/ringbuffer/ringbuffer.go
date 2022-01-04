@@ -1,23 +1,17 @@
 // Copyright (c) 2019 Andy Pan
 // Copyright (c) 2016 Aliaksandr Valialkin, VertaMedia
 //
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 //
 // Use of this source code is governed by a MIT license that can be found
 // at https://github.com/valyala/bytebufferpool/blob/master/LICENSE
@@ -29,7 +23,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/panjf2000/gnet/ringbuffer"
+	"github.com/panjf2000/gnet/pkg/ringbuffer"
 )
 
 const (
@@ -45,7 +39,7 @@ const (
 // RingBuffer is the alias of ringbuffer.RingBuffer.
 type RingBuffer = ringbuffer.RingBuffer
 
-// Pool represents byte buffer pool.
+// Pool represents ring-buffer pool.
 //
 // Distinct pools may be used for distinct types of byte buffers.
 // Properly determined byte buffer types with their own pools may help reducing
@@ -60,20 +54,20 @@ type Pool struct {
 	pool sync.Pool
 }
 
-var defaultPool Pool
+var builtinPool Pool
 
 // Get returns an empty byte buffer from the pool.
 //
 // Got byte buffer may be returned to the pool via Put call.
 // This reduces the number of memory allocations required for byte buffer
 // management.
-func Get() *RingBuffer { return defaultPool.Get() }
+func Get() *RingBuffer { return builtinPool.Get() }
 
 // Get returns new byte buffer with zero length.
 //
 // The byte buffer may be returned to the pool via Put after the use
 // in order to minimize GC overhead.
-func (p *Pool) Get() *ringbuffer.RingBuffer {
+func (p *Pool) Get() *RingBuffer {
 	v := p.pool.Get()
 	if v != nil {
 		return v.(*RingBuffer)
@@ -81,11 +75,27 @@ func (p *Pool) Get() *ringbuffer.RingBuffer {
 	return ringbuffer.New(int(atomic.LoadUint64(&p.defaultSize)))
 }
 
+// GetWithSize is like Get(), but with initial size.
+func GetWithSize(size int) *RingBuffer { return builtinPool.GetWithSize(size) }
+
+// GetWithSize is like Pool.Get(), but with initial size.
+func (p *Pool) GetWithSize(size int) *RingBuffer {
+	v := p.pool.Get()
+	if v != nil {
+		rb := v.(*RingBuffer)
+		if rb.Len() >= size {
+			return rb
+		}
+		p.pool.Put(v)
+	}
+	return ringbuffer.New(size)
+}
+
 // Put returns byte buffer to the pool.
 //
 // ByteBuffer.B mustn't be touched after returning it to the pool.
 // Otherwise data races will occur.
-func Put(b *RingBuffer) { defaultPool.Put(b) }
+func Put(b *RingBuffer) { builtinPool.Put(b) }
 
 // Put releases byte buffer obtained via Get to the pool.
 //

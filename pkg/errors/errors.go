@@ -1,22 +1,16 @@
 // Copyright (c) 2019 Andy Pan
 //
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package errors
 
@@ -46,23 +40,14 @@ var (
 
 	// ================================================= codec errors =================================================.
 
+	// ErrIncompletePacket occurs when there is an incomplete packet under TCP protocol.
+	ErrIncompletePacket = errors.New("incomplete packet")
 	// ErrInvalidFixedLength occurs when the output data have invalid fixed length.
 	ErrInvalidFixedLength = errors.New("invalid fixed length of bytes")
 	// ErrUnexpectedEOF occurs when no enough data to read by codec.
 	ErrUnexpectedEOF = errors.New("there is no enough data")
-	// ErrDelimiterNotFound occurs when no such a delimiter is in input data.
-	ErrDelimiterNotFound = errors.New("there is no such a delimiter")
-	// ErrCRLFNotFound occurs when a CRLF is not found by codec.
-	ErrCRLFNotFound = errors.New("there is no CRLF")
 	// ErrUnsupportedLength occurs when unsupported lengthFieldLength is from input data.
 	ErrUnsupportedLength = errors.New("unsupported lengthFieldLength. (expected: 1, 2, 3, 4, or 8)")
 	// ErrTooLessLength occurs when adjusted frame length is less than zero.
 	ErrTooLessLength = errors.New("adjusted frame length is less than zero")
-
-	// =============================================== internal errors ===============================================.
-
-	// ErrShortWritev occurs when internal/io.Writev fails to send all data.
-	ErrShortWritev = errors.New("short writev")
-	// ErrShortReadv occurs when internal/io.Readv fails to send all data.
-	ErrShortReadv = errors.New("short readv")
 )

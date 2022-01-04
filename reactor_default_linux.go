@@ -1,23 +1,18 @@
 // Copyright (c) 2019 Andy Pan
 //
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
+//go:build !poll_opt
 // +build !poll_opt
 
 package gnet
@@ -25,8 +20,8 @@ package gnet
 import (
 	"runtime"
 
-	"github.com/panjf2000/gnet/errors"
 	"github.com/panjf2000/gnet/internal/netpoll"
+	"github.com/panjf2000/gnet/pkg/errors"
 )
 
 func (el *eventloop) activateMainReactor(lockOSThread bool) {
@@ -37,7 +32,7 @@ func (el *eventloop) activateMainReactor(lockOSThread bool) {
 
 	defer el.svr.signalShutdown()
 
-	err := el.poller.Polling(func(fd int, ev uint32) error { return el.svr.acceptNewConnection(fd, ev) })
+	err := el.poller.Polling(func(fd int, ev uint32) error { return el.svr.accept(fd, ev) })
 	if err == errors.ErrServerShutdown {
 		el.svr.opts.Logger.Debugf("main reactor is exiting in terms of the demand from user, %v", err)
 	} else if err != nil {
@@ -52,7 +47,7 @@ func (el *eventloop) activateSubReactor(lockOSThread bool) {
 	}
 
 	defer func() {
-		el.closeAllConns()
+		el.closeAllSockets()
 		el.svr.signalShutdown()
 	}()
 
@@ -63,26 +58,26 @@ func (el *eventloop) activateSubReactor(lockOSThread bool) {
 			// Re-ordering can easily introduce bugs and bad side-effects, as I found out painfully in the past.
 
 			// We should always check for the EPOLLOUT event first, as we must try to send the leftover data back to
-			// client when any error occurs on a connection.
+			// the peer when any error occurs on a connection.
 			//
 			// Either an EPOLLOUT or EPOLLERR event may be fired when a connection is refused.
-			// In either case loopWrite() should take care of it properly:
+			// In either case write() should take care of it properly:
 			// 1) writing data back,
 			// 2) closing the connection.
 			if ev&netpoll.OutEvents != 0 && !c.outboundBuffer.IsEmpty() {
-				if err := el.loopWrite(c); err != nil {
+				if err := el.write(c); err != nil {
 					return err
 				}
 			}
 			// If there is pending data in outbound buffer, then we should omit this readable event
 			// and prioritize the writable events to achieve a higher performance.
 			//
-			// Note that the client may send massive amounts of data to server by write() under blocking mode,
-			// resulting in that it won't receive any responses before the server reads all data from client,
+			// Note that the peer may send massive amounts of data to server by write() under blocking mode,
+			// resulting in that it won't receive any responses before the server reads all data from the peer,
 			// in which case if the server socket send buffer is full, we need to let it go and continue reading
 			// the data to prevent blocking forever.
 			if ev&netpoll.InEvents != 0 && (ev&netpoll.OutEvents == 0 || c.outboundBuffer.IsEmpty()) {
-				return el.loopRead(c)
+				return el.read(c)
 			}
 		}
 		return nil
@@ -90,55 +85,55 @@ func (el *eventloop) activateSubReactor(lockOSThread bool) {
 	if err == errors.ErrServerShutdown {
 		el.svr.opts.Logger.Debugf("event-loop(%d) is exiting in terms of the demand from user, %v", el.idx, err)
 	} else if err != nil {
-		el.svr.opts.Logger.Errorf("event-loop(%d) is exiting normally on the signal error: %v", el.idx, err)
+		el.svr.opts.Logger.Errorf("event-loop(%d) is exiting due to error: %v", el.idx, err)
 	}
 }
 
-func (el *eventloop) loopRun(lockOSThread bool) {
+func (el *eventloop) run(lockOSThread bool) {
 	if lockOSThread {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 	}
 
 	defer func() {
-		el.closeAllConns()
+		el.closeAllSockets()
 		for _, ln := range el.lns {
 			ln.close()
 		}
 		el.svr.signalShutdown()
 	}()
 
-	err := el.poller.Polling(func(fd int, ev uint32) (err error) {
+	err := el.poller.Polling(func(fd int, ev uint32) error {
 		if c, ok := el.connections[fd]; ok {
 			// Don't change the ordering of processing EPOLLOUT | EPOLLRDHUP / EPOLLIN unless you're 100%
 			// sure what you're doing!
 			// Re-ordering can easily introduce bugs and bad side-effects, as I found out painfully in the past.
 
 			// We should always check for the EPOLLOUT event first, as we must try to send the leftover data back to
-			// client when any error occurs on a connection.
+			// the peer when any error occurs on a connection.
 			//
 			// Either an EPOLLOUT or EPOLLERR event may be fired when a connection is refused.
-			// In either case loopWrite() should take care of it properly:
+			// In either case write() should take care of it properly:
 			// 1) writing data back,
 			// 2) closing the connection.
 			if ev&netpoll.OutEvents != 0 && !c.outboundBuffer.IsEmpty() {
-				if err := el.loopWrite(c); err != nil {
+				if err := el.write(c); err != nil {
 					return err
 				}
 			}
 			// If there is pending data in outbound buffer, then we should omit this readable event
 			// and prioritize the writable events to achieve a higher performance.
 			//
-			// Note that the client may send massive amounts of data to server by write() under blocking mode,
-			// resulting in that it won't receive any responses before the server read all data from client,
+			// Note that the peer may send massive amounts of data to server by write() under blocking mode,
+			// resulting in that it won't receive any responses before the server reads all data from the peer,
 			// in which case if the socket send buffer is full, we need to let it go and continue reading the data
 			// to prevent blocking forever.
 			if ev&netpoll.InEvents != 0 && (ev&netpoll.OutEvents == 0 || c.outboundBuffer.IsEmpty()) {
-				return el.loopRead(c)
+				return el.read(c)
 			}
 			return nil
 		}
-		return el.loopAccept(fd, ev)
+		return el.accept(fd, ev)
 	})
 	el.getLogger().Debugf("event-loop(%d) is exiting due to error: %v", el.idx, err)
 }

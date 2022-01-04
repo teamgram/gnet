@@ -6,7 +6,6 @@
 <a title="Supported Platforms" target="_blank" href="https://github.com/panjf2000/gnet"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20FreeBSD%20%7C%20DragonFly%20%7C%20Darwin%20%7C%20Windows-549688?style=flat-square&logo=launchpad" /></a>
 <a title="Require Go Version" target="_blank" href="https://github.com/panjf2000/gnet"><img src="https://img.shields.io/badge/go-%3E%3D1.9-30dff3?style=flat-square&logo=go" /></a>
 <br />
-<a title="On XS" target="_blank" href="https://xscode.com/panjf2000/gnet"><img src="https://img.shields.io/badge/Available%20on-xs%3Acode-4b5cc4?style=flat-square&logo=cash-app" /></a>
 <a title="Chat Room" target="_blank" href="https://gitter.im/gnet-io/gnet?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=body_badge"><img src="https://badges.gitter.im/gnet-io/gnet.svg" /></a>
 <a title="Go Report Card" target="_blank" href="https://goreportcard.com/report/github.com/panjf2000/gnet"><img src="https://goreportcard.com/badge/github.com/panjf2000/gnet?style=flat-square" /></a>
 <a title="Doc for gnet" target="_blank" href="https://pkg.go.dev/github.com/panjf2000/gnet?tab=doc"><img src="https://img.shields.io/badge/go.dev-doc-007d9c?style=flat-square&logo=read-the-docs" /></a>
@@ -43,7 +42,7 @@
 - [x] SO_REUSEPORT 端口重用
 - [x] 内置多种编解码器，支持对 TCP 数据流分包：LineBasedFrameCodec, DelimiterBasedFrameCodec, FixedLengthFrameCodec 和 LengthFieldBasedFrameCodec，参考自 [netty codec](https://netty.io/4.1/api/io/netty/handler/codec/package-summary.html)，而且支持自定制编解码器
 - [x] 支持 Windows 平台，基于 ~~IOCP 事件驱动机制~~ Go 标准网络库
-- [ ] 实现 `gnet` 客户端
+- [x] 实现 `gnet` 客户端
 
 # 📊 性能测试
 
@@ -82,11 +81,11 @@ Go : go1.14.x linux/amd64
     Memory : 16.0 GiB
 
 # Go version and settings
-Go Version : go1.16.5 linux/amd64
+Go Version : go1.17.2 linux/amd64
 GOMAXPROCS : 8
 
 # Benchmark parameters
-TCP connections : 500/1000/5000/10000
+TCP connections : 1000/2000/5000/10000
 Packet size     : 512/1024/2048/4096/8192/16384/32768/65536 bytes
 Test duration   : 15s
 ```
@@ -129,7 +128,7 @@ Test duration   : 15s
 
 # ⚠️ 证书
 
-`gnet` 的源码文件需在遵循 MIT 开源证书的前提下使用。
+`gnet` 的源码需在遵循 Apache-2.0 开源证书的前提下使用。
 
 # 👏 贡献者
 
@@ -144,7 +143,6 @@ Test duration   : 15s
 - [Go netpoller 原生网络模型之源码全面揭秘](https://strikefreedom.top/go-netpoll-io-multiplexing-reactor)
 - [gnet: 一个轻量级且高性能的 Golang 网络库](https://strikefreedom.top/go-event-loop-networking-library-gnet)
 - [最快的 Go 网络框架 gnet 来啦！](https://strikefreedom.top/releasing-gnet-v1-with-techempower)
-- [字节跳动在 Go 网络库上的实践](https://strikefreedom.top/bytedance-network-library-practices)
 
 # 🎡 用户案例
 
@@ -177,14 +175,6 @@ Test duration   : 15s
 # 💴 资助者
 
 <a target="_blank" href="https://github.com/patrick-othmer"><img src="https://avatars1.githubusercontent.com/u/8964313" width="100" alt="Patrick Othmer" /></a>&nbsp;<a target="_blank" href="https://github.com/panjf2000/gnet"><img src="https://avatars2.githubusercontent.com/u/50285334" width="100" alt="Jimmy" /></a>&nbsp;<a target="_blank" href="https://github.com/cafra"><img src="https://avatars0.githubusercontent.com/u/13758306" width="100" alt="ChenZhen" /></a>&nbsp;<a target="_blank" href="https://github.com/yangwenmai"><img src="https://avatars0.githubusercontent.com/u/1710912" width="100" alt="Mai Yang" /></a>&nbsp;<a target="_blank" href="https://github.com/BeijingWks"><img src="https://avatars3.githubusercontent.com/u/33656339" width="100" alt="王开帅" /></a>&nbsp;<a target="_blank" href="https://github.com/refs"><img src="https://avatars3.githubusercontent.com/u/6905948" width="100" alt="Unger Alejandro" /></a>&nbsp;<a target="_blank" href="https://github.com/Swaggadan"><img src="https://avatars.githubusercontent.com/u/137142" width="100" alt="Swaggadan" /></a>&nbsp;<a target="_blank" href="https://github.com/Wuvist"><img src="https://avatars.githubusercontent.com/u/657796" width="100" alt="Weng Wei" /></a>
-
-# 💵 付费支持
-
-<p align="center">
-	<a title="XS:CODE" target="_blank" href="https://xscode.com/panjf2000/gnet"><img src="https://raw.githubusercontent.com/panjf2000/illustrations/master/go/gnet-banner.png" /></a>
-</p>
-
-如果你需要一个深度定制的 `gnet` 版本且想要作者协助开发、或者是需要花费时间精力的 bug 修复/快速方案/咨询等，可以到[这里](https://xscode.com/panjf2000/gnet)申请付费支持。
 
 # 🔑 JetBrains 开源证书支持
 

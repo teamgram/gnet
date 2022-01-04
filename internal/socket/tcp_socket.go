@@ -1,24 +1,19 @@
 // Copyright (c) 2020 Andy Pan
 // Copyright (c) 2017 Max Riveiro
 //
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
+//go:build linux || freebsd || dragonfly || darwin
 // +build linux freebsd dragonfly darwin
 
 package socket
@@ -29,12 +24,13 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/panjf2000/gnet/errors"
+	"github.com/panjf2000/gnet/pkg/errors"
 )
 
 var listenerBacklogMaxSize = maxListenerBacklog()
 
-func getTCPSockaddr(proto, addr string) (sa unix.Sockaddr, family int, tcpAddr *net.TCPAddr, ipv6only bool, err error) {
+// GetTCPSockAddr the structured addresses based on the protocol and raw address.
+func GetTCPSockAddr(proto, addr string) (sa unix.Sockaddr, family int, tcpAddr *net.TCPAddr, ipv6only bool, err error) {
 	var tcpVersion string
 
 	tcpAddr, err = net.ResolveTCPAddr(proto, addr)
@@ -111,14 +107,14 @@ func determineTCPProto(proto string, addr *net.TCPAddr) (string, error) {
 
 // tcpSocket creates an endpoint for communication and returns a file descriptor that refers to that endpoint.
 // Argument `reusePort` indicates whether the SO_REUSEPORT flag will be assigned.
-func tcpSocket(proto, addr string, sockopts ...Option) (fd int, netAddr net.Addr, err error) {
+func tcpSocket(proto, addr string, passive bool, sockOpts ...Option) (fd int, netAddr net.Addr, err error) {
 	var (
 		family   int
 		ipv6only bool
-		sockaddr unix.Sockaddr
+		sa       unix.Sockaddr
 	)
 
-	if sockaddr, family, netAddr, ipv6only, err = getTCPSockaddr(proto, addr); err != nil {
+	if sa, family, netAddr, ipv6only, err = GetTCPSockAddr(proto, addr); err != nil {
 		return
 	}
 
@@ -138,18 +134,22 @@ func tcpSocket(proto, addr string, sockopts ...Option) (fd int, netAddr net.Addr
 		}
 	}
 
-	for _, sockopt := range sockopts {
-		if err = sockopt.SetSockopt(fd, sockopt.Opt); err != nil {
+	for _, sockOpt := range sockOpts {
+		if err = sockOpt.SetSockOpt(fd, sockOpt.Opt); err != nil {
 			return
 		}
 	}
 
-	if err = os.NewSyscallError("bind", unix.Bind(fd, sockaddr)); err != nil {
+	if err = os.NewSyscallError("bind", unix.Bind(fd, sa)); err != nil {
 		return
 	}
 
-	// Set backlog size to the maximum.
-	err = os.NewSyscallError("listen", unix.Listen(fd, listenerBacklogMaxSize))
+	if passive {
+		// Set backlog size to the maximum.
+		err = os.NewSyscallError("listen", unix.Listen(fd, listenerBacklogMaxSize))
+	} else {
+		err = os.NewSyscallError("connect", unix.Connect(fd, sa))
+	}
 
 	return
 }
