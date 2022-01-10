@@ -39,6 +39,7 @@ type (
 		Decode(c Conn) (interface{}, error)
 		// Clone Clone
 		Clone() ICodec
+		Release()
 	}
 
 	// BuiltInFrameCodec is the built-in codec which will be assigned to gnet server when customized codec is not set up.
@@ -86,6 +87,10 @@ func (cc *BuiltInFrameCodec) Clone() ICodec {
 	return cc
 }
 
+// Release ...
+func (cc *BuiltInFrameCodec) Release() {
+}
+
 // Encode ...
 func (cc *LineBasedFrameCodec) Encode(c Conn, msg interface{}) ([]byte, error) {
 	return append(msg.([]byte), CRLFByte), nil
@@ -105,6 +110,10 @@ func (cc *LineBasedFrameCodec) Decode(c Conn) (interface{}, error) {
 // Clone ...
 func (cc *LineBasedFrameCodec) Clone() ICodec {
 	return cc
+}
+
+// Release ...
+func (cc *LineBasedFrameCodec) Release() {
 }
 
 // NewDelimiterBasedFrameCodec instantiates and returns a codec with a specific delimiter.
@@ -131,6 +140,10 @@ func (cc *DelimiterBasedFrameCodec) Decode(c Conn) (interface{}, error) {
 // Clone ...
 func (cc *DelimiterBasedFrameCodec) Clone() ICodec {
 	return cc
+}
+
+// Release ...
+func (cc *DelimiterBasedFrameCodec) Release() {
 }
 
 // NewFixedLengthFrameCodec instantiates and returns a codec with fixed length.
@@ -160,6 +173,10 @@ func (cc *FixedLengthFrameCodec) Decode(c Conn) (interface{}, error) {
 // Clone ...
 func (cc *FixedLengthFrameCodec) Clone() ICodec {
 	return cc
+}
+
+// Release ...
+func (cc *FixedLengthFrameCodec) Release() {
 }
 
 // NewLengthFieldBasedFrameCodec instantiates and returns a codec based on the length field.
@@ -356,4 +373,8 @@ func writeUint24(byteOrder binary.ByteOrder, v int) []byte {
 // Clone ...
 func (cc *LengthFieldBasedFrameCodec) Clone() ICodec {
 	return cc
+}
+
+// Release ...
+func (cc *LengthFieldBasedFrameCodec) Release() {
 }

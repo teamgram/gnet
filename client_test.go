@@ -57,7 +57,7 @@ func (ev *clientEvents) OnClosed(c Conn, err error) Action {
 	return None
 }
 
-func (ev *clientEvents) React(packet []byte, c Conn) (out []byte, action Action) {
+func (ev *clientEvents) React(msg interface{}, c Conn) (out interface{}, action Action) {
 	ctx := c.Context()
 	var p []byte
 	if ctx != nil {
@@ -65,7 +65,7 @@ func (ev *clientEvents) React(packet []byte, c Conn) (out []byte, action Action)
 	} else { // UDP
 		ev.packetLen = 1024
 	}
-	p = append(p, packet...)
+	p = append(p, msg.([]byte)...)
 	if len(p) < ev.packetLen {
 		c.SetContext(p)
 		return
@@ -235,7 +235,8 @@ func (s *testCodecClientServer) OnClosed(c Conn, err error) (action Action) {
 	return
 }
 
-func (s *testCodecClientServer) React(packet []byte, c Conn) (out []byte, action Action) {
+func (s *testCodecClientServer) React(msg interface{}, c Conn) (out interface{}, action Action) {
+	packet := msg.([]byte)
 	if s.async {
 		if packet != nil {
 			data := append([]byte{}, packet...)
@@ -522,10 +523,10 @@ func (s *testClientServer) OnClosed(c Conn, err error) (action Action) {
 	return
 }
 
-func (s *testClientServer) React(packet []byte, c Conn) (out []byte, action Action) {
+func (s *testClientServer) React(msg interface{}, c Conn) (out interface{}, action Action) {
 	if s.async {
 		buf := bbPool.Get()
-		_, _ = buf.Write(packet)
+		_, _ = buf.Write(msg.([]byte))
 
 		if s.network == "tcp" || s.network == "unix" {
 			// just for test
@@ -546,7 +547,7 @@ func (s *testClientServer) React(packet []byte, c Conn) (out []byte, action Acti
 		}
 		return
 	}
-	out = packet
+	out = msg
 	return
 }
 

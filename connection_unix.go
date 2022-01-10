@@ -80,6 +80,9 @@ func (c *conn) releaseTCP() {
 	c.ctx = nil
 	c.packets = nil
 	c.buffer = nil
+	if c.codec != nil {
+		c.codec.Release()
+	}
 	c.codec = nil
 	if addr, ok := c.localAddr.(*net.TCPAddr); ok {
 		hasAddr := false
