@@ -113,20 +113,3 @@ func initListener(network, addr string, options *Options) (l *listener, err erro
 	err = l.normalize()
 	return
 }
-
-func hasUdp(lns []*listener) (r bool) {
-	if len(lns) == 0 {
-		r = false
-		return
-	}
-
-	r = true
-	for _, ln := range lns {
-		if ln.network != "udp" {
-			r = false
-			break
-		}
-	}
-
-	return
-}

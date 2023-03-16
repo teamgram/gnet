@@ -125,11 +125,6 @@ func GetDefaultLogger() Logger {
 	return defaultLogger
 }
 
-// SetDefaultLogger set the default logger.
-func SetDefaultLogger(logger Logger) {
-	defaultLogger = logger
-}
-
 // LogLevel tells what the default logging level is.
 func LogLevel() string {
 	return defaultLoggingLevel.String()
