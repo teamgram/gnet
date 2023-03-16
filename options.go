@@ -17,7 +17,7 @@ package gnet
 import (
 	"time"
 
-	"github.com/panjf2000/gnet/pkg/logging"
+	"github.com/panjf2000/gnet/v2/pkg/logging"
 )
 
 // Option is a function that will set up option.
@@ -44,9 +44,9 @@ const (
 type Options struct {
 	// ================================== Options for only server-side ==================================
 
-	// Multicore indicates whether the server will be effectively created with multi-cores, if so,
+	// Multicore indicates whether the engine will be effectively created with multi-cores, if so,
 	// then you must take care with synchronizing memory between all event callbacks, otherwise,
-	// it will run the server with single thread. The number of threads in the server will be automatically
+	// it will run the engine with single thread. The number of threads in the engine will be automatically
 	// assigned to the value of logical CPUs usable by the current process.
 	Multicore bool
 
@@ -63,14 +63,26 @@ type Options struct {
 	// ReusePort indicates whether to set up the SO_REUSEPORT socket option.
 	ReusePort bool
 
+	// MulticastInterfaceIndex is the index of the interface name where the multicast UDP addresses will be bound to.
+	MulticastInterfaceIndex int
+
 	// ============================= Options for both server-side and client-side =============================
 
 	// ReadBufferCap is the maximum number of bytes that can be read from the peer when the readable event comes.
-	// The default value is 64KB, it can be reduced to avoid starving the subsequent connections.
+	// The default value is 64KB, it can either be reduced to avoid starving the subsequent connections or increased
+	// to read more data from a socket.
 	//
 	// Note that ReadBufferCap will always be converted to the least power of two integer value greater than
 	// or equal to its real amount.
 	ReadBufferCap int
+
+	// WriteBufferCap is the maximum number of bytes that a static outbound buffer can hold,
+	// if the data exceeds this value, the overflow will be stored in the elastic linked list buffer.
+	// The default value is 64KB.
+	//
+	// Note that WriteBufferCap will always be converted to the least power of two integer value greater than
+	// or equal to its real amount.
+	WriteBufferCap int
 
 	// LockOSThread is used to determine whether each I/O event-loop is associated to an OS thread, it is useful when you
 	// need some kind of mechanisms like thread local storage, or invoke certain C libraries (such as graphics lib: GLib)
@@ -97,9 +109,6 @@ type Options struct {
 	// SocketSendBuffer sets the maximum socket send buffer in bytes.
 	SocketSendBuffer int
 
-	// ICodec encodes and decodes TCP stream.
-	Codec ICodec
-
 	// LogPath the local path where logs will be written, this is the easiest way to set up logging,
 	// gnet instantiates a default uber-go/zap logger with this given log path, you are also allowed to employ
 	// you own logger during the lifetime by implementing the following log.Logger interface.
@@ -122,7 +131,7 @@ func WithOptions(options Options) Option {
 	}
 }
 
-// WithMulticore sets up multi-cores in gnet server.
+// WithMulticore sets up multi-cores in gnet engine.
 func WithMulticore(multicore bool) Option {
 	return func(opts *Options) {
 		opts.Multicore = multicore
@@ -143,14 +152,21 @@ func WithReadBufferCap(readBufferCap int) Option {
 	}
 }
 
-// WithLoadBalancing sets up the load-balancing algorithm in gnet server.
+// WithWriteBufferCap sets up WriteBufferCap for pending bytes.
+func WithWriteBufferCap(writeBufferCap int) Option {
+	return func(opts *Options) {
+		opts.WriteBufferCap = writeBufferCap
+	}
+}
+
+// WithLoadBalancing sets up the load-balancing algorithm in gnet engine.
 func WithLoadBalancing(lb LoadBalancing) Option {
 	return func(opts *Options) {
 		opts.LB = lb
 	}
 }
 
-// WithNumEventLoop sets up NumEventLoop in gnet server.
+// WithNumEventLoop sets up NumEventLoop in gnet engine.
 func WithNumEventLoop(numEventLoop int) Option {
 	return func(opts *Options) {
 		opts.NumEventLoop = numEventLoop
@@ -206,13 +222,6 @@ func WithTicker(ticker bool) Option {
 	}
 }
 
-// WithCodec sets up a codec to handle TCP stream.
-func WithCodec(codec ICodec) Option {
-	return func(opts *Options) {
-		opts.Codec = codec
-	}
-}
-
 // WithLogPath is an option to set up the local path of log file.
 func WithLogPath(fileName string) Option {
 	return func(opts *Options) {
@@ -231,5 +240,12 @@ func WithLogLevel(lvl logging.Level) Option {
 func WithLogger(logger logging.Logger) Option {
 	return func(opts *Options) {
 		opts.Logger = logger
+	}
+}
+
+// WithMulticastInterfaceIndex sets the interface name where UDP multicast sockets will be bound to.
+func WithMulticastInterfaceIndex(idx int) Option {
+	return func(opts *Options) {
+		opts.MulticastInterfaceIndex = idx
 	}
 }

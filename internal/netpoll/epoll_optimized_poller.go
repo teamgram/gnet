@@ -25,19 +25,19 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/panjf2000/gnet/internal/queue"
-	"github.com/panjf2000/gnet/pkg/errors"
-	"github.com/panjf2000/gnet/pkg/logging"
+	"github.com/panjf2000/gnet/v2/internal/queue"
+	"github.com/panjf2000/gnet/v2/pkg/errors"
+	"github.com/panjf2000/gnet/v2/pkg/logging"
 )
 
 // Poller represents a poller which is in charge of monitoring file-descriptors.
 type Poller struct {
-	fd                  int             // epoll fd
-	wpa                 *PollAttachment // PollAttachment for wake events
-	wfdBuf              []byte          // wfd buffer to read packet
-	netpollWakeSig      int32
-	asyncTaskQueue      queue.AsyncTaskQueue // queue with low priority
-	priorAsyncTaskQueue queue.AsyncTaskQueue // queue with high priority
+	fd                   int             // epoll fd
+	epa                  *PollAttachment // PollAttachment for waking events
+	efdBuf               []byte          // efd buffer to read an 8-byte integer
+	wakeupCall           int32
+	asyncTaskQueue       queue.AsyncTaskQueue // queue with low priority
+	urgentAsyncTaskQueue queue.AsyncTaskQueue // queue with high priority
 }
 
 // OpenPoller instantiates a poller.
@@ -48,22 +48,22 @@ func OpenPoller() (poller *Poller, err error) {
 		err = os.NewSyscallError("epoll_create1", err)
 		return
 	}
-	var wfd int
-	if wfd, err = unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC); err != nil {
+	var efd int
+	if efd, err = unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC); err != nil {
 		_ = poller.Close()
 		poller = nil
 		err = os.NewSyscallError("eventfd", err)
 		return
 	}
-	poller.wfdBuf = make([]byte, 8)
-	poller.wpa = &PollAttachment{FD: wfd}
-	if err = poller.AddRead(poller.wpa); err != nil {
+	poller.efdBuf = make([]byte, 8)
+	poller.epa = &PollAttachment{FD: efd}
+	if err = poller.AddRead(poller.epa); err != nil {
 		_ = poller.Close()
 		poller = nil
 		return
 	}
 	poller.asyncTaskQueue = queue.NewLockFreeQueue()
-	poller.priorAsyncTaskQueue = queue.NewLockFreeQueue()
+	poller.urgentAsyncTaskQueue = queue.NewLockFreeQueue()
 	return
 }
 
@@ -72,7 +72,7 @@ func (p *Poller) Close() error {
 	if err := os.NewSyscallError("close", unix.Close(p.fd)); err != nil {
 		return err
 	}
-	return os.NewSyscallError("close", unix.Close(p.wpa.FD))
+	return os.NewSyscallError("close", unix.Close(p.epa.FD))
 }
 
 // Make the endianness of bytes compatible with more linux OSs under different processor-architectures,
@@ -82,17 +82,18 @@ var (
 	b        = (*(*[8]byte)(unsafe.Pointer(&u)))[:]
 )
 
-// UrgentTrigger puts task into priorAsyncTaskQueue and wakes up the poller which is waiting for network-events,
-// then the poller will get tasks from priorAsyncTaskQueue and run them.
+// UrgentTrigger puts task into urgentAsyncTaskQueue and wakes up the poller which is waiting for network-events,
+// then the poller will get tasks from urgentAsyncTaskQueue and run them.
 //
-// Note that priorAsyncTaskQueue is a queue with high-priority and its size is expected to be small,
+// Note that urgentAsyncTaskQueue is a queue with high-priority and its size is expected to be small,
 // so only those urgent tasks should be put into this queue.
 func (p *Poller) UrgentTrigger(fn queue.TaskFunc, arg interface{}) (err error) {
 	task := queue.GetTask()
 	task.Run, task.Arg = fn, arg
-	p.priorAsyncTaskQueue.Enqueue(task)
-	if atomic.CompareAndSwapInt32(&p.netpollWakeSig, 0, 1) {
-		for _, err = unix.Write(p.wpa.FD, b); err == unix.EINTR || err == unix.EAGAIN; _, err = unix.Write(p.wpa.FD, b) {
+	p.urgentAsyncTaskQueue.Enqueue(task)
+	if atomic.CompareAndSwapInt32(&p.wakeupCall, 0, 1) {
+		if _, err = unix.Write(p.epa.FD, b); err == unix.EAGAIN {
+			err = nil
 		}
 	}
 	return os.NewSyscallError("write", err)
@@ -106,8 +107,9 @@ func (p *Poller) Trigger(fn queue.TaskFunc, arg interface{}) (err error) {
 	task := queue.GetTask()
 	task.Run, task.Arg = fn, arg
 	p.asyncTaskQueue.Enqueue(task)
-	if atomic.CompareAndSwapInt32(&p.netpollWakeSig, 0, 1) {
-		for _, err = unix.Write(p.wpa.FD, b); err == unix.EINTR || err == unix.EAGAIN; _, err = unix.Write(p.wpa.FD, b) {
+	if atomic.CompareAndSwapInt32(&p.wakeupCall, 0, 1) {
+		if _, err = unix.Write(p.epa.FD, b); err == unix.EAGAIN {
+			err = nil
 		}
 	}
 	return os.NewSyscallError("write", err)
@@ -116,7 +118,7 @@ func (p *Poller) Trigger(fn queue.TaskFunc, arg interface{}) (err error) {
 // Polling blocks the current goroutine, waiting for network-events.
 func (p *Poller) Polling() error {
 	el := newEventList(InitPollEventsCap)
-	var wakenUp bool
+	var doChores bool
 
 	msec := -1
 	for {
@@ -134,27 +136,27 @@ func (p *Poller) Polling() error {
 		for i := 0; i < n; i++ {
 			ev := &el.events[i]
 			pollAttachment := *(**PollAttachment)(unsafe.Pointer(&ev.data))
-			if pollAttachment.FD != p.wpa.FD {
+			if pollAttachment.FD != p.epa.FD {
 				switch err = pollAttachment.Callback(pollAttachment.FD, ev.events); err {
 				case nil:
-				case errors.ErrAcceptSocket, errors.ErrServerShutdown:
+				case errors.ErrAcceptSocket, errors.ErrEngineShutdown:
 					return err
 				default:
 					logging.Warnf("error occurs in event-loop: %v", err)
 				}
-			} else { // poller is awaken to run tasks in queues.
-				wakenUp = true
-				_, _ = unix.Read(p.wpa.FD, p.wfdBuf)
+			} else { // poller is awakened to run tasks in queues.
+				doChores = true
+				_, _ = unix.Read(p.epa.FD, p.efdBuf)
 			}
 		}
 
-		if wakenUp {
-			wakenUp = false
-			task := p.priorAsyncTaskQueue.Dequeue()
-			for ; task != nil; task = p.priorAsyncTaskQueue.Dequeue() {
+		if doChores {
+			doChores = false
+			task := p.urgentAsyncTaskQueue.Dequeue()
+			for ; task != nil; task = p.urgentAsyncTaskQueue.Dequeue() {
 				switch err = task.Run(task.Arg); err {
 				case nil:
-				case errors.ErrServerShutdown:
+				case errors.ErrEngineShutdown:
 					return err
 				default:
 					logging.Warnf("error occurs in user-defined function, %v", err)
@@ -167,16 +169,19 @@ func (p *Poller) Polling() error {
 				}
 				switch err = task.Run(task.Arg); err {
 				case nil:
-				case errors.ErrServerShutdown:
+				case errors.ErrEngineShutdown:
 					return err
 				default:
 					logging.Warnf("error occurs in user-defined function, %v", err)
 				}
 				queue.PutTask(task)
 			}
-			atomic.StoreInt32(&p.netpollWakeSig, 0)
-			if (!p.asyncTaskQueue.IsEmpty() || !p.priorAsyncTaskQueue.IsEmpty()) && atomic.CompareAndSwapInt32(&p.netpollWakeSig, 0, 1) {
-				for _, err = unix.Write(p.wpa.FD, b); err == unix.EINTR || err == unix.EAGAIN; _, err = unix.Write(p.wpa.FD, b) {
+			atomic.StoreInt32(&p.wakeupCall, 0)
+			if (!p.asyncTaskQueue.IsEmpty() || !p.urgentAsyncTaskQueue.IsEmpty()) && atomic.CompareAndSwapInt32(&p.wakeupCall, 0, 1) {
+				switch _, err = unix.Write(p.epa.FD, b); err {
+				case nil, unix.EAGAIN:
+				default:
+					doChores = true
 				}
 			}
 		}

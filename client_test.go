@@ -18,9 +18,8 @@
 package gnet
 
 import (
-	"encoding/binary"
 	"math/rand"
-	"strings"
+	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -29,26 +28,26 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/panjf2000/gnet/pkg/logging"
-	bbPool "github.com/panjf2000/gnet/pkg/pool/bytebuffer"
-	goPool "github.com/panjf2000/gnet/pkg/pool/goroutine"
+	"github.com/panjf2000/gnet/v2/pkg/logging"
+	bbPool "github.com/panjf2000/gnet/v2/pkg/pool/bytebuffer"
+	goPool "github.com/panjf2000/gnet/v2/pkg/pool/goroutine"
 )
 
 type clientEvents struct {
-	*EventServer
+	*BuiltinEventEngine
 	svr       *testClientServer
 	packetLen int
 	rspChMap  sync.Map
 }
 
-func (ev *clientEvents) OnOpened(c Conn) ([]byte, Action) {
+func (ev *clientEvents) OnOpen(c Conn) ([]byte, Action) {
 	c.SetContext([]byte{})
 	rspCh := make(chan []byte, 1)
 	ev.rspChMap.Store(c.LocalAddr().String(), rspCh)
 	return nil, None
 }
 
-func (ev *clientEvents) OnClosed(c Conn, err error) Action {
+func (ev *clientEvents) OnClose(c Conn, err error) Action {
 	if ev.svr != nil {
 		if atomic.AddInt32(&ev.svr.clientActive, -1) == 0 {
 			return Shutdown
@@ -57,7 +56,7 @@ func (ev *clientEvents) OnClosed(c Conn, err error) Action {
 	return None
 }
 
-func (ev *clientEvents) React(msg interface{}, c Conn) (out interface{}, action Action) {
+func (ev *clientEvents) OnTraffic(c Conn) (action Action) {
 	ctx := c.Context()
 	var p []byte
 	if ctx != nil {
@@ -65,7 +64,8 @@ func (ev *clientEvents) React(msg interface{}, c Conn) (out interface{}, action 
 	} else { // UDP
 		ev.packetLen = 1024
 	}
-	p = append(p, msg.([]byte)...)
+	buf, _ := c.Next(-1)
+	p = append(p, buf...)
 	if len(p) < ev.packetLen {
 		c.SetContext(p)
 		return
@@ -77,299 +77,17 @@ func (ev *clientEvents) React(msg interface{}, c Conn) (out interface{}, action 
 	return
 }
 
-func (ev *clientEvents) Tick() (delay time.Duration, action Action) {
+func (ev *clientEvents) OnTick() (delay time.Duration, action Action) {
 	delay = 200 * time.Millisecond
 	return
 }
 
-func TestCodecServeWithGnetClient(t *testing.T) {
-	// start a server
-	// connect 10 clients
-	// each client will pipe random data for 1-3 seconds.
-	// the writes to the server will be random sizes. 0KB - 1MB.
-	// the server will echo back the data.
-	// waits for graceful connection closing.
-	t.Run("poll", func(t *testing.T) {
-		t.Run("tcp", func(t *testing.T) {
-			t.Run("1-loop-LineBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9991", false, false, 10, false, new(LineBasedFrameCodec))
-			})
-			t.Run("1-loop-DelimiterBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9992", false, false, 10, false, NewDelimiterBasedFrameCodec('|'))
-			})
-			t.Run("1-loop-FixedLengthFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9993", false, false, 10, false, NewFixedLengthFrameCodec(packetLen))
-			})
-			t.Run("1-loop-LengthFieldBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9994", false, false, 10, false, nil)
-			})
-			t.Run("N-loop-LineBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9995", true, false, 10, false, new(LineBasedFrameCodec))
-			})
-			t.Run("N-loop-DelimiterBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9996", true, false, 10, false, NewDelimiterBasedFrameCodec('|'))
-			})
-			t.Run("N-loop-FixedLengthFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9997", true, false, 10, false, NewFixedLengthFrameCodec(packetLen))
-			})
-			t.Run("N-loop-LengthFieldBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9998", true, false, 10, false, nil)
-			})
-		})
-		t.Run("tcp-async", func(t *testing.T) {
-			t.Run("1-loop-LineBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9991", false, true, 10, false, new(LineBasedFrameCodec))
-			})
-			t.Run("1-loop-DelimiterBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9992", false, true, 10, false, NewDelimiterBasedFrameCodec('|'))
-			})
-			t.Run("1-loop-FixedLengthFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9993", false, true, 10, false, NewFixedLengthFrameCodec(packetLen))
-			})
-			t.Run("1-loop-LengthFieldBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9994", false, true, 10, false, nil)
-			})
-			t.Run("N-loop-LineBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9995", true, true, 10, false, new(LineBasedFrameCodec))
-			})
-			t.Run("N-loop-DelimiterBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9996", true, true, 10, false, NewDelimiterBasedFrameCodec('|'))
-			})
-			t.Run("N-loop-FixedLengthFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9997", true, true, 10, false, NewFixedLengthFrameCodec(packetLen))
-			})
-			t.Run("N-loop-LengthFieldBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9998", true, true, 10, false, nil)
-			})
-		})
-	})
-	t.Run("poll-reuseport", func(t *testing.T) {
-		t.Run("tcp", func(t *testing.T) {
-			t.Run("1-loop-LineBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9991", false, false, 10, true, new(LineBasedFrameCodec))
-			})
-			t.Run("1-loop-DelimiterBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9992", false, false, 10, true, NewDelimiterBasedFrameCodec('|'))
-			})
-			t.Run("1-loop-FixedLengthFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9993", false, false, 10, true, NewFixedLengthFrameCodec(packetLen))
-			})
-			t.Run("1-loop-LengthFieldBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9994", false, false, 10, true, nil)
-			})
-			t.Run("N-loop-LineBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9995", true, false, 10, true, new(LineBasedFrameCodec))
-			})
-			t.Run("N-loop-DelimiterBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9996", true, false, 10, true, NewDelimiterBasedFrameCodec('|'))
-			})
-			t.Run("N-loop-FixedLengthFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9997", true, false, 10, true, NewFixedLengthFrameCodec(packetLen))
-			})
-			t.Run("N-loop-LengthFieldBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9998", true, false, 10, true, nil)
-			})
-		})
-		t.Run("tcp-async", func(t *testing.T) {
-			t.Run("1-loop-LineBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9991", false, true, 10, true, new(LineBasedFrameCodec))
-			})
-			t.Run("1-loop-DelimiterBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9992", false, true, 10, true, NewDelimiterBasedFrameCodec('|'))
-			})
-			t.Run("1-loop-FixedLengthFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9993", false, true, 10, true, NewFixedLengthFrameCodec(packetLen))
-			})
-			t.Run("1-loop-LengthFieldBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9994", false, true, 10, true, nil)
-			})
-			t.Run("N-loop-LineBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9995", true, true, 10, true, new(LineBasedFrameCodec))
-			})
-			t.Run("N-loop-DelimiterBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9996", true, true, 10, true, NewDelimiterBasedFrameCodec('|'))
-			})
-			t.Run("N-loop-FixedLengthFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9997", true, true, 10, true, NewFixedLengthFrameCodec(packetLen))
-			})
-			t.Run("N-loop-LengthFieldBasedFrameCodec", func(t *testing.T) {
-				testCodecServeWithGnetClient(t, "tcp", ":9998", true, true, 10, true, nil)
-			})
-		})
-	})
-}
-
-type testCodecClientServer struct {
-	*EventServer
-	client       *Client
-	clientEV     *clientEvents
-	nclients     int
-	tester       *testing.T
-	network      string
-	addr         string
-	multicore    bool
-	async        bool
-	started      int32
-	connected    int32
-	disconnected int32
-	codec        ICodec
-	workerPool   *goPool.Pool
-}
-
-func (s *testCodecClientServer) OnOpened(c Conn) (out []byte, action Action) {
-	c.SetContext(c)
-	atomic.AddInt32(&s.connected, 1)
-	require.NotNil(s.tester, c.LocalAddr(), "nil local addr")
-	require.NotNil(s.tester, c.RemoteAddr(), "nil remote addr")
-	return
-}
-
-func (s *testCodecClientServer) OnClosed(c Conn, err error) (action Action) {
-	require.Equal(s.tester, c.Context(), c, "invalid context")
-	atomic.AddInt32(&s.disconnected, 1)
-	if atomic.LoadInt32(&s.connected) == atomic.LoadInt32(&s.disconnected) &&
-		atomic.LoadInt32(&s.disconnected) == int32(s.nclients) {
-		action = Shutdown
-	}
-
-	return
-}
-
-func (s *testCodecClientServer) React(msg interface{}, c Conn) (out interface{}, action Action) {
-	packet := msg.([]byte)
-	if s.async {
-		if packet != nil {
-			data := append([]byte{}, packet...)
-			_ = s.workerPool.Submit(func() {
-				_ = c.AsyncWrite(data)
-			})
-		}
-		return
-	}
-	out = packet
-	return
-}
-
-func (s *testCodecClientServer) Tick() (delay time.Duration, action Action) {
-	if atomic.CompareAndSwapInt32(&s.started, 0, 1) {
-		for i := 0; i < s.nclients; i++ {
-			go startCodecGnetClient(s.tester, s.client, s.clientEV, s.network, s.addr, s.multicore, s.async, s.codec)
-		}
-	}
-	delay = time.Second / 5
-	return
-}
-
-func testCodecServeWithGnetClient(
-	t *testing.T,
-	network, addr string,
-	multicore, async bool,
-	nclients int,
-	reuseport bool,
-	codec ICodec,
-) {
-	var err error
-	if codec == nil {
-		encoderConfig := EncoderConfig{
-			ByteOrder:                       binary.BigEndian,
-			LengthFieldLength:               2,
-			LengthAdjustment:                0,
-			LengthIncludesLengthFieldLength: false,
-		}
-		decoderConfig := DecoderConfig{
-			ByteOrder:           binary.BigEndian,
-			LengthFieldOffset:   0,
-			LengthFieldLength:   2,
-			LengthAdjustment:    0,
-			InitialBytesToStrip: 2,
-		}
-		codec = NewLengthFieldBasedFrameCodec(encoderConfig, decoderConfig)
-	}
-	ts := &testCodecClientServer{
-		tester: t, network: network, addr: addr, multicore: multicore, async: async,
-		codec: codec, workerPool: goPool.Default(), nclients: nclients,
-	}
-	ts.clientEV = &clientEvents{packetLen: packetLen}
-	ts.client, err = NewClient(
-		ts.clientEV,
-		WithLogLevel(logging.DebugLevel),
-		WithCodec(codec),
-		WithReadBufferCap(8*1024),
-		WithLockOSThread(true),
-		WithTCPNoDelay(TCPNoDelay),
-		WithTCPKeepAlive(time.Minute),
-		WithSocketRecvBuffer(8*1024),
-		WithSocketSendBuffer(8*1024),
-		WithTicker(true),
-	)
-	assert.NoError(t, err)
-	err = ts.client.Start()
-	assert.NoError(t, err)
-	err = Serve(
-		ts,
-		[]string{network + "://" + addr},
-		WithMulticore(multicore),
-		WithTicker(true),
-		WithLogLevel(logging.DebugLevel),
-		WithSocketRecvBuffer(8*1024),
-		WithSocketSendBuffer(8*1024),
-		WithCodec(codec),
-		WithReusePort(reuseport),
-	)
-	assert.NoError(t, err)
-	err = ts.client.Stop()
-	assert.NoError(t, err)
-}
-
-func startCodecGnetClient(t *testing.T, cli *Client, ev *clientEvents, network, addr string, multicore, async bool, codec ICodec) {
-	c, err := cli.Dial(network, addr)
-	require.NoError(t, err)
-	defer c.Close()
-	var (
-		ok bool
-		v  interface{}
-	)
-	start := time.Now()
-	for time.Since(start) < time.Second {
-		v, ok = ev.rspChMap.Load(c.LocalAddr().String())
-		if ok {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	require.True(t, ok)
-	rspCh := v.(chan []byte)
-	duration := time.Duration((rand.Float64()*2+1)*float64(time.Second)) / 8
-	start = time.Now()
-	for time.Since(start) < duration {
-		// reqData := make([]byte, 1024)
-		// rand.Read(reqData)
-		reqData := []byte(strings.Repeat("x", packetLen))
-		err = c.AsyncWrite(reqData)
-		require.NoError(t, err)
-		respData := <-rspCh
-		if !async {
-			// require.Equalf(t, reqData, respData, "response mismatch with protocol:%s, multi-core:%t, content of bytes: %d vs %d", network, multicore, string(reqData), string(respData))
-			require.Equalf(
-				t,
-				reqData,
-				respData,
-				"response mismatch with protocol:%s, multi-core:%t, length of bytes: %d vs %d",
-				network,
-				multicore,
-				len(reqData),
-				len(respData),
-			)
-		}
-	}
-}
-
 func TestServeWithGnetClient(t *testing.T) {
-	// start a server
+	// start an engine
 	// connect 10 clients
 	// each client will pipe random data for 1-3 seconds.
-	// the writes to the server will be random sizes. 0KB - 1MB.
-	// the server will echo back the data.
+	// the writes to the engine will be random sizes. 0KB - 1MB.
+	// the engine will echo back the data.
 	// waits for graceful connection closing.
 	t.Run("poll", func(t *testing.T) {
 		t.Run("tcp", func(t *testing.T) {
@@ -475,11 +193,11 @@ func TestServeWithGnetClient(t *testing.T) {
 }
 
 type testClientServer struct {
-	*EventServer
+	*BuiltinEventEngine
 	client       *Client
 	clientEV     *clientEvents
 	tester       *testing.T
-	svr          Server
+	eng          Engine
 	network      string
 	addr         string
 	multicore    bool
@@ -492,12 +210,12 @@ type testClientServer struct {
 	workerPool   *goPool.Pool
 }
 
-func (s *testClientServer) OnInitComplete(svr Server) (action Action) {
-	s.svr = svr
+func (s *testClientServer) OnBoot(eng Engine) (action Action) {
+	s.eng = eng
 	return
 }
 
-func (s *testClientServer) OnOpened(c Conn) (out []byte, action Action) {
+func (s *testClientServer) OnOpen(c Conn) (out []byte, action Action) {
 	c.SetContext(c)
 	atomic.AddInt32(&s.connected, 1)
 	require.NotNil(s.tester, c.LocalAddr(), "nil local addr")
@@ -505,7 +223,7 @@ func (s *testClientServer) OnOpened(c Conn) (out []byte, action Action) {
 	return
 }
 
-func (s *testClientServer) OnClosed(c Conn, err error) (action Action) {
+func (s *testClientServer) OnClose(c Conn, err error) (action Action) {
 	if err != nil {
 		logging.Debugf("error occurred on closed, %v\n", err)
 	}
@@ -523,39 +241,37 @@ func (s *testClientServer) OnClosed(c Conn, err error) (action Action) {
 	return
 }
 
-func (s *testClientServer) React(msg interface{}, c Conn) (out interface{}, action Action) {
+func (s *testClientServer) OnTraffic(c Conn) (action Action) {
 	if s.async {
 		buf := bbPool.Get()
-		_, _ = buf.Write(msg.([]byte))
+		_, _ = c.WriteTo(buf)
 
 		if s.network == "tcp" || s.network == "unix" {
 			// just for test
-			_ = c.BufferLength()
-			c.ShiftN(1)
-
-			_ = s.workerPool.Submit(
-				func() {
-					_ = c.AsyncWrite(buf.Bytes())
-				})
-			return
-		} else if s.network == "udp" {
-			_ = s.workerPool.Submit(
-				func() {
-					_ = c.SendTo(buf.Bytes())
-				})
-			return
+			_ = c.InboundBuffered()
+			_ = c.OutboundBuffered()
+			_, _ = c.Discard(1)
 		}
+		_ = s.workerPool.Submit(
+			func() {
+				_ = c.AsyncWrite(buf.Bytes(), nil)
+			})
 		return
 	}
-	out = msg
+	buf, _ := c.Next(-1)
+	_, _ = c.Write(buf)
 	return
 }
 
-func (s *testClientServer) Tick() (delay time.Duration, action Action) {
+func (s *testClientServer) OnTick() (delay time.Duration, action Action) {
 	if atomic.CompareAndSwapInt32(&s.started, 0, 1) {
 		for i := 0; i < s.nclients; i++ {
 			atomic.AddInt32(&s.clientActive, 1)
-			go startGnetClient(s.tester, s.client, s.clientEV, s.network, s.addr, s.multicore, s.async)
+			var netConn bool
+			if i%2 == 0 {
+				netConn = true
+			}
+			go startGnetClient(s.tester, s.client, s.clientEV, s.network, s.addr, s.multicore, s.async, netConn)
 		}
 	}
 	if s.network == "udp" && atomic.LoadInt32(&s.clientActive) == 0 {
@@ -585,10 +301,13 @@ func testServeWithGnetClient(t *testing.T, network, addr string, reuseport, reus
 		WithTicker(true),
 	)
 	assert.NoError(t, err)
+
 	err = ts.client.Start()
 	assert.NoError(t, err)
-	err = Serve(ts,
-		[]string{network + "://" + addr},
+	defer ts.client.Stop() //nolint:errcheck
+
+	err = Run(ts,
+		network+"://"+addr,
 		WithLockOSThread(async),
 		WithMulticore(multicore),
 		WithReusePort(reuseport),
@@ -600,9 +319,20 @@ func testServeWithGnetClient(t *testing.T, network, addr string, reuseport, reus
 	assert.NoError(t, err)
 }
 
-func startGnetClient(t *testing.T, cli *Client, ev *clientEvents, network, addr string, multicore, async bool) {
+func startGnetClient(t *testing.T, cli *Client, ev *clientEvents, network, addr string, multicore, async, netDial bool) {
 	rand.Seed(time.Now().UnixNano())
-	c, err := cli.Dial(network, addr)
+	var (
+		c   Conn
+		err error
+	)
+	if netDial {
+		var netConn net.Conn
+		netConn, err = net.Dial(network, addr)
+		require.NoError(t, err)
+		c, err = cli.Enroll(netConn)
+	} else {
+		c, err = cli.Dial(network, addr)
+	}
 	require.NoError(t, err)
 	defer c.Close()
 	var rspCh chan []byte
@@ -625,7 +355,8 @@ func startGnetClient(t *testing.T, cli *Client, ev *clientEvents, network, addr 
 		require.True(t, ok)
 		rspCh = v.(chan []byte)
 	}
-	duration := time.Duration((rand.Float64()*2+1)*float64(time.Second)) / 8
+	duration := time.Duration((rand.Float64()*2+1)*float64(time.Second)) / 2
+	t.Logf("test duration: %dms", duration/time.Millisecond)
 	start := time.Now()
 	for time.Since(start) < duration {
 		reqData := make([]byte, streamLen)
@@ -634,11 +365,7 @@ func startGnetClient(t *testing.T, cli *Client, ev *clientEvents, network, addr 
 		}
 		_, err = rand.Read(reqData)
 		require.NoError(t, err)
-		if network == "udp" {
-			err = c.SendTo(reqData)
-		} else {
-			err = c.AsyncWrite(reqData)
-		}
+		err = c.AsyncWrite(reqData, nil)
 		require.NoError(t, err)
 		respData := <-rspCh
 		require.NoError(t, err)

@@ -23,7 +23,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/panjf2000/gnet/pkg/ringbuffer"
+	"github.com/panjf2000/gnet/v2/pkg/buffer/ring"
 )
 
 const (
@@ -36,13 +36,13 @@ const (
 	maxPercentile           = 0.95
 )
 
-// RingBuffer is the alias of ringbuffer.RingBuffer.
-type RingBuffer = ringbuffer.RingBuffer
+// RingBuffer is the alias of ring.Buffer.
+type RingBuffer = ring.Buffer
 
 // Pool represents ring-buffer pool.
 //
 // Distinct pools may be used for distinct types of byte buffers.
-// Properly determined byte buffer types with their own pools may help reducing
+// Properly determined byte buffer types with their own pools may help to reduce
 // memory waste.
 type Pool struct {
 	calls       [steps]uint64
@@ -72,29 +72,13 @@ func (p *Pool) Get() *RingBuffer {
 	if v != nil {
 		return v.(*RingBuffer)
 	}
-	return ringbuffer.New(int(atomic.LoadUint64(&p.defaultSize)))
-}
-
-// GetWithSize is like Get(), but with initial size.
-func GetWithSize(size int) *RingBuffer { return builtinPool.GetWithSize(size) }
-
-// GetWithSize is like Pool.Get(), but with initial size.
-func (p *Pool) GetWithSize(size int) *RingBuffer {
-	v := p.pool.Get()
-	if v != nil {
-		rb := v.(*RingBuffer)
-		if rb.Len() >= size {
-			return rb
-		}
-		p.pool.Put(v)
-	}
-	return ringbuffer.New(size)
+	return ring.New(int(atomic.LoadUint64(&p.defaultSize)))
 }
 
 // Put returns byte buffer to the pool.
 //
-// ByteBuffer.B mustn't be touched after returning it to the pool.
-// Otherwise data races will occur.
+// RingBuffer mustn't be touched after returning it to the pool,
+// otherwise, data races will occur.
 func Put(b *RingBuffer) { builtinPool.Put(b) }
 
 // Put releases byte buffer obtained via Get to the pool.

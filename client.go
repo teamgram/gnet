@@ -22,18 +22,17 @@ import (
 	"errors"
 	"net"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"golang.org/x/sys/unix"
 
-	"github.com/panjf2000/gnet/internal/netpoll"
-	"github.com/panjf2000/gnet/internal/socket"
-	"github.com/panjf2000/gnet/internal/toolkit"
-	gerrors "github.com/panjf2000/gnet/pkg/errors"
-	"github.com/panjf2000/gnet/pkg/logging"
+	"github.com/panjf2000/gnet/v2/internal/math"
+	"github.com/panjf2000/gnet/v2/internal/netpoll"
+	"github.com/panjf2000/gnet/v2/internal/socket"
+	"github.com/panjf2000/gnet/v2/pkg/buffer/ring"
+	gerrors "github.com/panjf2000/gnet/v2/pkg/errors"
+	"github.com/panjf2000/gnet/v2/pkg/logging"
 )
 
 // Client of gnet.
@@ -59,30 +58,42 @@ func NewClient(eventHandler EventHandler, opts ...Option) (cli *Client, err erro
 	if options.Logger == nil {
 		options.Logger = logger
 	}
-	if options.Codec == nil {
-		cli.opts.Codec = new(BuiltInFrameCodec)
-	}
 	var p *netpoll.Poller
 	if p, err = netpoll.OpenPoller(); err != nil {
 		return
 	}
-	svr := new(server)
-	svr.opts = options
-	svr.eventHandler = eventHandler
-	svr.lns = []*listener{&listener{network: "udp"}}
-	svr.cond = sync.NewCond(&sync.Mutex{})
+	eng := new(engine)
+	eng.opts = options
+	eng.eventHandler = eventHandler
+	eng.ln = &listener{network: "udp"}
+	eng.cond = sync.NewCond(&sync.Mutex{})
 	if options.Ticker {
-		svr.tickerCtx, svr.cancelTicker = context.WithCancel(context.Background())
+		eng.tickerCtx, eng.cancelTicker = context.WithCancel(context.Background())
 	}
 	el := new(eventloop)
-	el.lns = svr.lns
-	el.svr = svr
+	el.ln = eng.ln
+	el.engine = eng
 	el.poller = p
-	if rbc := options.ReadBufferCap; rbc <= 0 {
-		options.ReadBufferCap = 0x10000
-	} else {
-		options.ReadBufferCap = toolkit.CeilToPowerOfTwo(rbc)
+
+	rbc := options.ReadBufferCap
+	switch {
+	case rbc <= 0:
+		options.ReadBufferCap = MaxStreamBufferCap
+	case rbc <= ring.DefaultBufferSize:
+		options.ReadBufferCap = ring.DefaultBufferSize
+	default:
+		options.ReadBufferCap = math.CeilToPowerOfTwo(rbc)
 	}
+	wbc := options.WriteBufferCap
+	switch {
+	case wbc <= 0:
+		options.WriteBufferCap = MaxStreamBufferCap
+	case wbc <= ring.DefaultBufferSize:
+		options.WriteBufferCap = ring.DefaultBufferSize
+	default:
+		options.WriteBufferCap = math.CeilToPowerOfTwo(wbc)
+	}
+
 	el.buffer = make([]byte, options.ReadBufferCap)
 	el.udpSockets = make(map[int]*conn)
 	el.connections = make(map[int]*conn)
@@ -93,28 +104,28 @@ func NewClient(eventHandler EventHandler, opts ...Option) (cli *Client, err erro
 
 // Start starts the client event-loop, handing IO events.
 func (cli *Client) Start() error {
-	cli.el.eventHandler.OnInitComplete(Server{})
-	cli.el.svr.wg.Add(1)
+	cli.el.eventHandler.OnBoot(Engine{})
+	cli.el.engine.wg.Add(1)
 	go func() {
 		cli.el.run(cli.opts.LockOSThread)
-		cli.el.svr.wg.Done()
+		cli.el.engine.wg.Done()
 	}()
 	// Start the ticker.
 	if cli.opts.Ticker {
-		go cli.el.ticker(cli.el.svr.tickerCtx)
+		go cli.el.ticker(cli.el.engine.tickerCtx)
 	}
 	return nil
 }
 
 // Stop stops the client event-loop.
 func (cli *Client) Stop() (err error) {
-	err = cli.el.poller.UrgentTrigger(func(_ interface{}) error { return gerrors.ErrServerShutdown }, nil)
-	cli.el.svr.wg.Wait()
-	cli.el.poller.Close()
-	cli.el.eventHandler.OnShutdown(Server{})
+	logging.Error(cli.el.poller.UrgentTrigger(func(_ interface{}) error { return gerrors.ErrEngineShutdown }, nil))
+	cli.el.engine.wg.Wait()
+	logging.Error(cli.el.poller.Close())
+	cli.el.eventHandler.OnShutdown(Engine{})
 	// Stop the ticker.
 	if cli.opts.Ticker {
-		cli.el.svr.cancelTicker()
+		cli.el.engine.cancelTicker()
 	}
 	if cli.logFlush != nil {
 		err = cli.logFlush()
@@ -129,6 +140,11 @@ func (cli *Client) Dial(network, address string) (Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	return cli.Enroll(c)
+}
+
+// Enroll converts a net.Conn to gnet.Conn and then adds it into Client.
+func (cli *Client) Enroll(c net.Conn) (Conn, error) {
 	defer c.Close()
 
 	sc, ok := c.(syscall.Conn)
@@ -140,9 +156,9 @@ func (cli *Client) Dial(network, address string) (Conn, error) {
 		return nil, errors.New("failed to get syscall.RawConn from net.Conn")
 	}
 
-	var DupFD int
+	var dupFD int
 	e := rc.Control(func(fd uintptr) {
-		DupFD, err = unix.Dup(int(fd))
+		dupFD, err = unix.Dup(int(fd))
 	})
 	if err != nil {
 		return nil, err
@@ -151,26 +167,13 @@ func (cli *Client) Dial(network, address string) (Conn, error) {
 		return nil, e
 	}
 
-	if strings.HasPrefix(network, "tcp") {
-		if cli.opts.TCPNoDelay == TCPNoDelay {
-			if err = socket.SetNoDelay(DupFD, 1); err != nil {
-				return nil, err
-			}
-		}
-		if cli.opts.TCPKeepAlive > 0 {
-			if err = socket.SetKeepAlive(DupFD, int(cli.opts.TCPKeepAlive/time.Second)); err != nil {
-				return nil, err
-			}
-		}
-	}
-
 	if cli.opts.SocketSendBuffer > 0 {
-		if err = socket.SetSendBuffer(DupFD, cli.opts.SocketSendBuffer); err != nil {
+		if err = socket.SetSendBuffer(dupFD, cli.opts.SocketSendBuffer); err != nil {
 			return nil, err
 		}
 	}
 	if cli.opts.SocketRecvBuffer > 0 {
-		if err = socket.SetRecvBuffer(DupFD, cli.opts.SocketRecvBuffer); err != nil {
+		if err = socket.SetRecvBuffer(dupFD, cli.opts.SocketRecvBuffer); err != nil {
 			return nil, err
 		}
 	}
@@ -185,18 +188,28 @@ func (cli *Client) Dial(network, address string) (Conn, error) {
 			return nil, err
 		}
 		ua := c.LocalAddr().(*net.UnixAddr)
-		ua.Name = c.RemoteAddr().String() + "." + strconv.Itoa(DupFD)
-		gc = newTCPConn(DupFD, cli.el, sockAddr, cli.opts.Codec, c.LocalAddr(), c.RemoteAddr())
+		ua.Name = c.RemoteAddr().String() + "." + strconv.Itoa(dupFD)
+		gc = newTCPConn(dupFD, cli.el, sockAddr, c.LocalAddr(), c.RemoteAddr())
 	case *net.TCPConn:
+		if cli.opts.TCPNoDelay == TCPDelay {
+			if err = socket.SetNoDelay(dupFD, 0); err != nil {
+				return nil, err
+			}
+		}
+		if cli.opts.TCPKeepAlive > 0 {
+			if err = socket.SetKeepAlivePeriod(dupFD, int(cli.opts.TCPKeepAlive.Seconds())); err != nil {
+				return nil, err
+			}
+		}
 		if sockAddr, _, _, _, err = socket.GetTCPSockAddr(c.RemoteAddr().Network(), c.RemoteAddr().String()); err != nil {
 			return nil, err
 		}
-		gc = newTCPConn(DupFD, cli.el, sockAddr, cli.opts.Codec, c.LocalAddr(), c.RemoteAddr())
+		gc = newTCPConn(dupFD, cli.el, sockAddr, c.LocalAddr(), c.RemoteAddr())
 	case *net.UDPConn:
 		if sockAddr, _, _, _, err = socket.GetUDPSockAddr(c.RemoteAddr().Network(), c.RemoteAddr().String()); err != nil {
 			return nil, err
 		}
-		gc = newUDPConn(DupFD, cli.el, c.LocalAddr(), sockAddr, true)
+		gc = newUDPConn(dupFD, cli.el, c.LocalAddr(), sockAddr, true)
 	default:
 		return nil, gerrors.ErrUnsupportedProtocol
 	}

@@ -21,8 +21,10 @@ package gnet
 import (
 	"runtime"
 
-	"github.com/panjf2000/gnet/internal/netpoll"
-	"github.com/panjf2000/gnet/pkg/errors"
+	"golang.org/x/sys/unix"
+
+	"github.com/panjf2000/gnet/v2/internal/netpoll"
+	"github.com/panjf2000/gnet/v2/pkg/errors"
 )
 
 func (el *eventloop) activateMainReactor(lockOSThread bool) {
@@ -31,13 +33,13 @@ func (el *eventloop) activateMainReactor(lockOSThread bool) {
 		defer runtime.UnlockOSThread()
 	}
 
-	defer el.svr.signalShutdown()
+	defer el.engine.signalShutdown()
 
-	err := el.poller.Polling(func(fd int, filter int16) error { return el.svr.accept(fd, 0, filter) })
-	if err == errors.ErrServerShutdown {
-		el.svr.opts.Logger.Debugf("main reactor is exiting in terms of the demand from user, %v", err)
+	err := el.poller.Polling(func(fd int, filter int16) error { return el.engine.accept(fd, filter) })
+	if err == errors.ErrEngineShutdown {
+		el.engine.opts.Logger.Debugf("main reactor is exiting in terms of the demand from user, %v", err)
 	} else if err != nil {
-		el.svr.opts.Logger.Errorf("main reactor is exiting due to error: %v", err)
+		el.engine.opts.Logger.Errorf("main reactor is exiting due to error: %v", err)
 	}
 }
 
@@ -49,14 +51,14 @@ func (el *eventloop) activateSubReactor(lockOSThread bool) {
 
 	defer func() {
 		el.closeAllSockets()
-		el.svr.signalShutdown()
+		el.engine.signalShutdown()
 	}()
 
 	err := el.poller.Polling(func(fd int, filter int16) (err error) {
 		if c, ack := el.connections[fd]; ack {
 			switch filter {
 			case netpoll.EVFilterSock:
-				err = el.closeConn(c, nil)
+				err = el.closeConn(c, unix.ECONNRESET)
 			case netpoll.EVFilterWrite:
 				if !c.outboundBuffer.IsEmpty() {
 					err = el.write(c)
@@ -67,10 +69,10 @@ func (el *eventloop) activateSubReactor(lockOSThread bool) {
 		}
 		return
 	})
-	if err == errors.ErrServerShutdown {
-		el.svr.opts.Logger.Debugf("event-loop(%d) is exiting in terms of the demand from user, %v", el.idx, err)
+	if err == errors.ErrEngineShutdown {
+		el.engine.opts.Logger.Debugf("event-loop(%d) is exiting in terms of the demand from user, %v", el.idx, err)
 	} else if err != nil {
-		el.svr.opts.Logger.Errorf("event-loop(%d) is exiting due to error: %v", el.idx, err)
+		el.engine.opts.Logger.Errorf("event-loop(%d) is exiting due to error: %v", el.idx, err)
 	}
 }
 
@@ -82,17 +84,15 @@ func (el *eventloop) run(lockOSThread bool) {
 
 	defer func() {
 		el.closeAllSockets()
-		for _, ln := range el.lns {
-			ln.close()
-		}
-		el.svr.signalShutdown()
+		el.ln.close()
+		el.engine.signalShutdown()
 	}()
 
 	err := el.poller.Polling(func(fd int, filter int16) (err error) {
 		if c, ack := el.connections[fd]; ack {
 			switch filter {
 			case netpoll.EVFilterSock:
-				err = el.closeConn(c, nil)
+				err = el.closeConn(c, unix.ECONNRESET)
 			case netpoll.EVFilterWrite:
 				if !c.outboundBuffer.IsEmpty() {
 					err = el.write(c)
@@ -102,7 +102,7 @@ func (el *eventloop) run(lockOSThread bool) {
 			}
 			return
 		}
-		return el.accept(fd, 0, filter)
+		return el.accept(fd, filter)
 	})
 	el.getLogger().Debugf("event-loop(%d) is exiting due to error: %v", el.idx, err)
 }

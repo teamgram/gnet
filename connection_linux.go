@@ -17,7 +17,7 @@
 
 package gnet
 
-import "github.com/panjf2000/gnet/internal/netpoll"
+import "github.com/panjf2000/gnet/v2/internal/netpoll"
 
 func (c *conn) handleEvents(_ int, _ int, ev uint32) error {
 	// Don't change the ordering of processing EPOLLOUT | EPOLLRDHUP / EPOLLIN unless you're 100%
@@ -36,15 +36,9 @@ func (c *conn) handleEvents(_ int, _ int, ev uint32) error {
 			return err
 		}
 	}
-	// If there is pending data in outbound buffer, then we should omit this readable event
-	// and prioritize the writable events to achieve a higher performance.
-	//
-	// Note that the peer may send massive amounts of data to server by write() under blocking mode,
-	// resulting in that it won't receive any responses before the server reads all data from the peer,
-	// in which case if the server socket send buffer is full, we need to let it go and continue reading
-	// the data to prevent blocking forever.
-	if ev&netpoll.InEvents != 0 && (ev&netpoll.OutEvents == 0 || c.outboundBuffer.IsEmpty()) {
+	if ev&netpoll.InEvents != 0 {
 		return c.loop.read(c)
 	}
+
 	return nil
 }

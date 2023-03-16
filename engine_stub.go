@@ -13,13 +13,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !linux && !freebsd && !dragonfly && !darwin && !windows
-// +build !linux,!freebsd,!dragonfly,!darwin,!windows
+//go:build !linux && !freebsd && !dragonfly && !darwin
+// +build !linux,!freebsd,!dragonfly,!darwin
 
 package gnet
 
 import (
-	"github.com/panjf2000/gnet/pkg/errors"
+	"github.com/panjf2000/gnet/v2/pkg/errors"
 )
 
 type server struct {

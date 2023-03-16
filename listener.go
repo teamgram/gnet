@@ -25,10 +25,10 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/panjf2000/gnet/internal/netpoll"
-	"github.com/panjf2000/gnet/internal/socket"
-	"github.com/panjf2000/gnet/pkg/errors"
-	"github.com/panjf2000/gnet/pkg/logging"
+	"github.com/panjf2000/gnet/v2/internal/netpoll"
+	"github.com/panjf2000/gnet/v2/internal/socket"
+	"github.com/panjf2000/gnet/v2/pkg/errors"
+	"github.com/panjf2000/gnet/v2/pkg/logging"
 )
 
 type listener struct {
@@ -99,6 +99,15 @@ func initListener(network, addr string, options *Options) (l *listener, err erro
 	if options.SocketSendBuffer > 0 {
 		sockOpt := socket.Option{SetSockOpt: socket.SetSendBuffer, Opt: options.SocketSendBuffer}
 		sockOpts = append(sockOpts, sockOpt)
+	}
+	if strings.HasPrefix(network, "udp") {
+		udpAddr, err := net.ResolveUDPAddr(network, addr)
+		if err == nil && udpAddr.IP.IsMulticast() {
+			if sockoptFn := socket.SetMulticastMembership(network, udpAddr); sockoptFn != nil {
+				sockOpt := socket.Option{SetSockOpt: sockoptFn, Opt: options.MulticastInterfaceIndex}
+				sockOpts = append(sockOpts, sockOpt)
+			}
+		}
 	}
 	l = &listener{network: network, address: addr, sockOpts: sockOpts}
 	err = l.normalize()

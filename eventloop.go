@@ -19,6 +19,7 @@
 package gnet
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -29,17 +30,17 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/panjf2000/gnet/internal/io"
-	"github.com/panjf2000/gnet/internal/netpoll"
-	gerrors "github.com/panjf2000/gnet/pkg/errors"
-	"github.com/panjf2000/gnet/pkg/logging"
+	"github.com/panjf2000/gnet/v2/internal/io"
+	"github.com/panjf2000/gnet/v2/internal/netpoll"
+	gerrors "github.com/panjf2000/gnet/v2/pkg/errors"
+	"github.com/panjf2000/gnet/v2/pkg/logging"
 )
 
 type eventloop struct {
-	lns          []*listener // listener
-	idx          int         // loop index in the server loops list
-	next         uint16
-	svr          *server         // server in loop
+	ln           *listener       // listener
+	idx          int             // loop index in the engine loops list
+	cache        bytes.Buffer    // temporary buffer for scattered bytes
+	engine       *engine         // engine in loop
 	poller       *netpoll.Poller // epoll or kqueue
 	buffer       []byte          // read packet buffer whose capacity is set by user, default value is 64KB
 	connCount    int32           // number of active connections in event-loop
@@ -49,7 +50,7 @@ type eventloop struct {
 }
 
 func (el *eventloop) getLogger() logging.Logger {
-	return el.svr.opts.Logger
+	return el.engine.opts.Logger
 }
 
 func (el *eventloop) addConn(delta int32) {
@@ -97,7 +98,7 @@ func (el *eventloop) open(c *conn) error {
 	c.opened = true
 	el.addConn(1)
 
-	out, action := el.eventHandler.OnOpened(c)
+	out, action := el.eventHandler.OnOpen(c)
 	if out != nil {
 		if err := c.open(out); err != nil {
 			return err
@@ -115,68 +116,47 @@ func (el *eventloop) open(c *conn) error {
 
 func (el *eventloop) read(c *conn) error {
 	n, err := unix.Read(c.fd, el.buffer)
-	if n == 0 || err != nil {
+	if err != nil || n == 0 {
 		if err == unix.EAGAIN {
 			return nil
+		}
+		if n == 0 {
+			err = unix.ECONNRESET
 		}
 		return el.closeConn(c, os.NewSyscallError("read", err))
 	}
 
 	c.buffer = el.buffer[:n]
-	for packet, _ := c.read(); packet != nil; packet, _ = c.read() {
-		out, action := el.eventHandler.React(packet, c)
-		if out != nil {
-			// Encode data and try to write it back to the peer, this attempt is based on a fact:
-			// the peer socket waits for the response data after sending request data to the server,
-			// which makes the peer socket writable.
-			if err = c.write(out); err != nil {
-				return err
-			}
-		}
-		switch action {
-		case None:
-		case Close:
-			return el.closeConn(c, nil)
-		case Shutdown:
-			return gerrors.ErrServerShutdown
-		}
-
-		// Check the status of connection every loop since it might be closed
-		// during writing data back to the peer due to some kind of system error.
-		if !c.opened {
-			return nil
-		}
+	action := el.eventHandler.OnTraffic(c)
+	switch action {
+	case None:
+	case Close:
+		return el.closeConn(c, nil)
+	case Shutdown:
+		return gerrors.ErrEngineShutdown
 	}
-
 	_, _ = c.inboundBuffer.Write(c.buffer)
 
 	return nil
 }
 
-const (
-	// MaxBytesToWritePerLoop is the maximum amount of bytes to be sent in one system call.
-	MaxBytesToWritePerLoop = 64 * 1024
-	// MaxIovSize is IOV_MAX.
-	MaxIovSize = 1024
-)
+const iovMax = 1024
 
 func (el *eventloop) write(c *conn) error {
-	el.eventHandler.PreWrite(c)
-
-	iov := c.outboundBuffer.Peek(MaxBytesToWritePerLoop)
+	iov := c.outboundBuffer.Peek(-1)
 	var (
 		n   int
 		err error
 	)
 	if len(iov) > 1 {
-		if len(iov) > MaxIovSize {
-			iov = iov[:MaxIovSize]
+		if len(iov) > iovMax {
+			iov = iov[:iovMax]
 		}
 		n, err = io.Writev(c.fd, iov)
 	} else {
 		n, err = unix.Write(c.fd, iov[0])
 	}
-	c.outboundBuffer.Discard(n)
+	_, _ = c.outboundBuffer.Discard(n)
 	switch err {
 	case nil:
 	case unix.EAGAIN:
@@ -197,19 +177,12 @@ func (el *eventloop) write(c *conn) error {
 func (el *eventloop) closeConn(c *conn, err error) (rerr error) {
 	if addr := c.localAddr; addr != nil && strings.HasPrefix(c.localAddr.Network(), "udp") {
 		rerr = el.poller.Delete(c.fd)
-		hasFd := false
-		for _, ln := range el.lns {
-			if c.fd == ln.fd {
-				hasFd = true
-				break
-			}
-		}
-		if !hasFd {
+		if c.fd != el.ln.fd {
 			rerr = unix.Close(c.fd)
 			delete(el.udpSockets, c.fd)
 		}
-		if el.eventHandler.OnClosed(c, err) == Shutdown {
-			return gerrors.ErrServerShutdown
+		if el.eventHandler.OnClose(c, err) == Shutdown {
+			return gerrors.ErrEngineShutdown
 		}
 		c.releaseUDP()
 		return
@@ -223,15 +196,15 @@ func (el *eventloop) closeConn(c *conn, err error) (rerr error) {
 	if !c.outboundBuffer.IsEmpty() {
 		for !c.outboundBuffer.IsEmpty() {
 			iov := c.outboundBuffer.Peek(0)
-			if len(iov) > MaxIovSize {
-				iov = iov[:MaxIovSize]
+			if len(iov) > iovMax {
+				iov = iov[:iovMax]
 			}
-			n, err := io.Writev(c.fd, iov)
-			if err != nil && err != unix.EAGAIN {
-				el.getLogger().Warnf("closeConn: error occurs when sending data back to peer, %v", err)
+			if n, e := io.Writev(c.fd, iov); e != nil {
+				el.getLogger().Warnf("closeConn: error occurs when sending data back to peer, %v", e)
 				break
+			} else {
+				_, _ = c.outboundBuffer.Discard(n)
 			}
-			c.outboundBuffer.Discard(n)
 		}
 	}
 
@@ -250,8 +223,8 @@ func (el *eventloop) closeConn(c *conn, err error) (rerr error) {
 
 	delete(el.connections, c.fd)
 	el.addConn(-1)
-	if el.eventHandler.OnClosed(c, err) == Shutdown {
-		rerr = gerrors.ErrServerShutdown
+	if el.eventHandler.OnClose(c, err) == Shutdown {
+		rerr = gerrors.ErrEngineShutdown
 	}
 	c.releaseTCP()
 
@@ -263,12 +236,7 @@ func (el *eventloop) wake(c *conn) error {
 		return nil // ignore stale wakes.
 	}
 
-	out, action := el.eventHandler.React(nil, c)
-	if out != nil {
-		if err := c.write(out); err != nil {
-			return err
-		}
-	}
+	action := el.eventHandler.OnTraffic(c)
 
 	return el.handleAction(c, action)
 }
@@ -288,12 +256,12 @@ func (el *eventloop) ticker(ctx context.Context) {
 		}
 	}()
 	for {
-		delay, action = el.eventHandler.Tick()
+		delay, action = el.eventHandler.OnTick()
 		switch action {
 		case None:
 		case Shutdown:
-			err := el.poller.UrgentTrigger(func(_ interface{}) error { return gerrors.ErrServerShutdown }, nil)
-			el.getLogger().Debugf("stopping ticker in event-loop(%d) from Tick(), UrgentTrigger:%v", el.idx, err)
+			err := el.poller.UrgentTrigger(func(_ interface{}) error { return gerrors.ErrEngineShutdown }, nil)
+			el.getLogger().Debugf("stopping ticker in event-loop(%d) from OnTick(), UrgentTrigger:%v", el.idx, err)
 		}
 		if timer == nil {
 			timer = time.NewTimer(delay)
@@ -302,7 +270,7 @@ func (el *eventloop) ticker(ctx context.Context) {
 		}
 		select {
 		case <-ctx.Done():
-			el.getLogger().Debugf("stopping ticker in event-loop(%d) from Server, error:%v", el.idx, ctx.Err())
+			el.getLogger().Debugf("stopping ticker in event-loop(%d) from Engine, error:%v", el.idx, ctx.Err())
 			return
 		case <-timer.C:
 		}
@@ -316,13 +284,13 @@ func (el *eventloop) handleAction(c *conn, action Action) error {
 	case Close:
 		return el.closeConn(c, nil)
 	case Shutdown:
-		return gerrors.ErrServerShutdown
+		return gerrors.ErrEngineShutdown
 	default:
 		return nil
 	}
 }
 
-func (el *eventloop) readUDP(fd, lnidx int, _ netpoll.IOEvent) error {
+func (el *eventloop) readUDP(fd int, _ netpoll.IOEvent) error {
 	n, sa, err := unix.Recvfrom(fd, el.buffer, 0)
 	if err != nil {
 		if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
@@ -332,20 +300,18 @@ func (el *eventloop) readUDP(fd, lnidx int, _ netpoll.IOEvent) error {
 			fd, el.idx, os.NewSyscallError("recvfrom", err))
 	}
 	var c *conn
-	if fd == el.lns[lnidx].fd {
-		c = newUDPConn(fd, el, el.lns[lnidx].addr, sa, false)
+	if fd == el.ln.fd {
+		c = newUDPConn(fd, el, el.ln.addr, sa, false)
 	} else {
 		c = el.udpSockets[fd]
 	}
-	out, action := el.eventHandler.React(el.buffer[:n], c)
-	if out != nil {
-		_ = c.sendTo(out.([]byte))
-	}
+	c.buffer = el.buffer[:n]
+	action := el.eventHandler.OnTraffic(c)
 	if c.peer != nil {
 		c.releaseUDP()
 	}
 	if action == Shutdown {
-		return gerrors.ErrServerShutdown
+		return gerrors.ErrEngineShutdown
 	}
 	return nil
 }
