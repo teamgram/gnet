@@ -47,6 +47,7 @@ type eventloop struct {
 	udpSockets   map[int]*conn     // client-side UDP socket map: fd -> conn
 	connections  map[int]*conn     // TCP connection map: fd -> conn
 	eventHandler EventHandler      // user eventHandler
+	next         uint16
 }
 
 func (el *eventloop) getLogger() logging.Logger {

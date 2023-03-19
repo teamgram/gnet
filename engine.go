@@ -294,3 +294,52 @@ func run(eventHandler EventHandler, listeners map[int]*listener, options *Option
 
 	return nil
 }
+
+// AsyncWrite - AsyncWrite
+func (eng *engine) AsyncWrite(connId int64, data []byte) {
+	elidx := int(connId >> 48 & 0xffff)
+	id := uint16(connId >> 32 & 0xffff)
+	fd := int(connId & 0xffffffff)
+
+	eng.lb.iterate(func(i int, el *eventloop) bool {
+		if i == elidx {
+			_ = el.poller.Trigger(func(_ interface{}) error {
+				if c, ok := el.connections[fd]; ok && c.id == id {
+					if !c.opened {
+						return nil
+					}
+					c.write(data)
+				}
+				return nil
+			}, nil)
+			return false
+		}
+		return true
+	})
+}
+
+// Trigger - Trigger
+func (eng *engine) Trigger(connId int64, cb func(c Conn)) {
+	if cb == nil {
+		return
+	}
+
+	elidx := int(connId >> 48 & 0xffff)
+	id := uint16(connId >> 32 & 0xffff)
+	fd := int(connId & 0xffffffff)
+
+	eng.lb.iterate(func(i int, el *eventloop) bool {
+		if i == elidx {
+			_ = el.poller.Trigger(func(_ interface{}) error {
+				if c, ok := el.connections[fd]; ok && id == c.id {
+					if c.opened {
+						cb(c)
+					}
+				}
+				return nil
+			}, nil)
+			return false
+		}
+		return true
+	})
+}

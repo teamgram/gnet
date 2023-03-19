@@ -278,6 +278,12 @@ type Conn interface {
 
 	// Close closes the current connection, implements net.Conn.
 	Close() (err error)
+
+	// ConnID ConnID
+	ConnID() int64
+
+	// String String
+	String() string
 }
 
 type (

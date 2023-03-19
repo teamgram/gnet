@@ -19,6 +19,7 @@
 package gnet
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -48,6 +49,9 @@ type conn struct {
 	fd             int                     // file descriptor
 	isDatagram     bool                    // UDP protocol
 	opened         bool                    // connection opened event fired
+	connId         int64
+	id             uint16
+	debugString    string
 }
 
 func newTCPConn(fd int, el *eventloop, sa unix.Sockaddr, localAddr, remoteAddr net.Addr) (c *conn) {
@@ -57,7 +61,10 @@ func newTCPConn(fd int, el *eventloop, sa unix.Sockaddr, localAddr, remoteAddr n
 		loop:       el,
 		localAddr:  localAddr,
 		remoteAddr: remoteAddr,
+		id:         el.next,
+		connId:     int64(el.idx)<<48 | int64(el.next)<<32 | int64(fd),
 	}
+	el.next = el.next + 1
 	c.outboundBuffer, _ = elastic.New(el.engine.opts.WriteBufferCap)
 	c.pollAttachment = netpoll.GetPollAttachment()
 	c.pollAttachment.FD, c.pollAttachment.Callback = fd, c.handleEvents
@@ -96,7 +103,10 @@ func newUDPConn(fd int, el *eventloop, localAddr net.Addr, sa unix.Sockaddr, con
 		localAddr:  localAddr,
 		remoteAddr: socket.SockaddrToUDPAddr(sa),
 		isDatagram: true,
+		id:         el.next,
+		connId:     int64(el.idx)<<48 | int64(el.next)<<32 | int64(fd),
 	}
+	el.next = el.next + 1
 	if connected {
 		c.peer = nil
 	}
@@ -476,4 +486,15 @@ func (c *conn) Close() error {
 		err = c.loop.closeConn(c, nil)
 		return
 	}, nil)
+}
+
+func (c *conn) ConnID() int64 {
+	return c.connId
+}
+
+func (c *conn) String() string {
+	if c.debugString == "" {
+		c.debugString = fmt.Sprintf("%d@(%s->%s)", c.connId, c.remoteAddr.String(), c.localAddr.String())
+	}
+	return c.debugString
 }
