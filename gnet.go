@@ -375,7 +375,7 @@ var MaxStreamBufferCap = 64 * 1024 // 64KB
 //	unix  - Unix Domain Socket
 //
 // The "tcp" network scheme is assumed when one is not specified.
-func Run(eventHandler EventHandler, protoAddr string, opts ...Option) (err error) {
+func Run(eventHandler EventHandler, addrs string, opts ...Option) (err error) {
 	options := loadOptions(opts...)
 
 	logging.Debugf("default logging level is %s", logging.LogLevel())
@@ -428,10 +428,9 @@ func Run(eventHandler EventHandler, protoAddr string, opts ...Option) (err error
 		options.WriteBufferCap = math.CeilToPowerOfTwo(wbc)
 	}
 
-	network, addrs := parseProtoAddr(protoAddr)
-
 	listeners := make(map[int]*listener)
-	for _, addr := range strings.Split(addrs, ",") {
+	for _, protoAddr := range strings.Split(addrs, ",") {
+		network, addr := parseProtoAddr(protoAddr)
 		doF := func() {
 			var ln *listener
 			if ln, err = initListener(network, addr, options); err != nil {
@@ -443,7 +442,7 @@ func Run(eventHandler EventHandler, protoAddr string, opts ...Option) (err error
 		doF()
 	}
 
-	return run(eventHandler, listeners, options, protoAddr)
+	return run(eventHandler, listeners, options, addrs)
 }
 
 var (
@@ -456,12 +455,12 @@ var (
 // Stop gracefully shuts down the engine without interrupting any active event-loops,
 // it waits indefinitely for connections and event-loops to be closed and then shuts down.
 // Deprecated: The global Stop only shuts down the last registered Engine with the same protocol and IP:Port as the previous Engine's, which can lead to leaks of Engine if you invoke gnet.Run multiple times using the same protocol and IP:Port under the condition that WithReuseAddr(true) and WithReusePort(true) are enabled. Use Engine.Stop instead.
-func Stop(ctx context.Context, protoAddr string) error {
+func Stop(ctx context.Context, addrs string) error {
 	var eng *engine
-	if s, ok := allEngines.Load(protoAddr); ok {
+	if s, ok := allEngines.Load(addrs); ok {
 		eng = s.(*engine)
 		eng.signalShutdown()
-		defer allEngines.Delete(protoAddr)
+		defer allEngines.Delete(addrs)
 	} else {
 		return errors.ErrEngineInShutdown
 	}
