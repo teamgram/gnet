@@ -494,17 +494,15 @@ func Run(eventHandler EventHandler, addrs string, opts ...Option) (err error) {
 	}
 
 	listeners := make(map[int]*listener)
+
 	for _, protoAddr := range strings.Split(addrs, ",") {
 		network, addr := parseProtoAddr(protoAddr)
-		doF := func() {
-			var ln *listener
-			if ln, err = initListener(network, addr, options); err != nil {
-				return
-			}
-			listeners[ln.fd] = ln
-			defer ln.close()
+		var ln *listener
+		if ln, err = initListener(network, addr, options); err != nil {
+			return
 		}
-		doF()
+		listeners[ln.fd] = ln
+		defer ln.close()
 	}
 
 	return run(eventHandler, listeners, options, addrs)
