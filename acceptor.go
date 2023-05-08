@@ -32,12 +32,18 @@ import (
 func (eng *engine) accept(fd int, _ netpoll.IOEvent) error {
 	nfd, sa, err := unix.Accept(fd)
 	if err != nil {
-		if err == unix.EAGAIN {
+		switch err {
+		case unix.EINTR, unix.EAGAIN, unix.ECONNABORTED:
+			// ECONNABORTED means that a socket on the listen
+			// queue was closed before we Accept()ed it;
+			// it's a silly error, so try again.
 			return nil
+		default:
+			eng.opts.Logger.Errorf("Accept() failed due to error: %v", err)
+			return errors.ErrAcceptSocket
 		}
-		eng.opts.Logger.Errorf("Accept() failed due to error: %v", err)
-		return errors.ErrAcceptSocket
 	}
+
 	if err = os.NewSyscallError("fcntl nonblock", unix.SetNonblock(nfd, true)); err != nil {
 		return err
 	}
@@ -58,6 +64,7 @@ func (eng *engine) accept(fd int, _ netpoll.IOEvent) error {
 		_ = unix.Close(nfd)
 		c.releaseTCP()
 	}
+
 	return nil
 }
 
@@ -69,16 +76,21 @@ func (el *eventloop) accept(fd int, ev netpoll.IOEvent) error {
 
 	nfd, sa, err := unix.Accept(fd)
 	if err != nil {
-		if err == unix.EAGAIN {
+		switch err {
+		case unix.EINTR, unix.EAGAIN, unix.ECONNABORTED:
+			// ECONNABORTED means that a socket on the listen
+			// queue was closed before we Accept()ed it;
+			// it's a silly error, so try again.
 			return nil
+		default:
+			el.getLogger().Errorf("Accept() failed due to error: %v", err)
+			return errors.ErrAcceptSocket
 		}
-		el.getLogger().Errorf("Accept() failed due to error: %v", err)
-		return os.NewSyscallError("accept", err)
 	}
+
 	if err = os.NewSyscallError("fcntl nonblock", unix.SetNonblock(nfd, true)); err != nil {
 		return err
 	}
-
 	remoteAddr := socket.SockaddrToTCPOrUnixAddr(sa)
 	if el.engine.opts.TCPKeepAlive > 0 && ln.network == "tcp" {
 		err = socket.SetKeepAlivePeriod(nfd, int(el.engine.opts.TCPKeepAlive/time.Second))
@@ -90,5 +102,6 @@ func (el *eventloop) accept(fd int, ev netpoll.IOEvent) error {
 		return err
 	}
 	el.connections[c.fd] = c
+
 	return el.open(c)
 }
