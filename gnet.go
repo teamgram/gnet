@@ -1,5 +1,4 @@
-// Copyright (c) 2019 Andy Pan
-// Copyright (c) 2018 Joshua J Baker
+// Copyright (c) 2019 The Gnet Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -49,14 +48,25 @@ type Engine struct {
 	eng *engine
 }
 
+// Validate checks whether the engine is available.
+func (e Engine) Validate() error {
+	if e.eng == nil {
+		return errors.ErrEmptyEngine
+	}
+	if e.eng.isInShutdown() {
+		return errors.ErrEngineInShutdown
+	}
+	return nil
+}
+
 // CountConnections counts the number of currently active connections and returns it.
-func (s Engine) CountConnections() (count int) {
-	if s.eng == nil {
+func (e Engine) CountConnections() (count int) {
+	if e.Validate() != nil {
 		return -1
 	}
 
-	s.eng.lb.iterate(func(i int, el *eventloop) bool {
-		count += int(el.loadConn())
+	e.eng.eventLoops.iterate(func(_ int, el *eventloop) bool {
+		count += int(el.countConn())
 		return true
 	})
 	return
@@ -65,17 +75,16 @@ func (s Engine) CountConnections() (count int) {
 // Dup returns a copy of the underlying file descriptor of listener.
 // It is the caller's responsibility to close dupFD when finished.
 // Closing listener does not affect dupFD, and closing dupFD does not affect listener.
-// Returns error when engine has multiple listeners.
-func (s Engine) Dup() (dupFD int, err error) {
-	if s.eng == nil {
-		return -1, errors.ErrEmptyEngine
+func (e Engine) Dup() (fd int, err error) {
+	if err = e.Validate(); err != nil {
+		return -1, err
 	}
 
-	if len(s.eng.listeners) > 1 {
+	if len(e.eng.listeners) > 1 {
 		return -1, errors.ErrUnsupportedOp
 	}
 	var ln *listener
-	for _, ln = range s.eng.listeners {
+	for _, ln = range e.eng.listeners {
 		break
 	}
 
@@ -84,7 +93,7 @@ func (s Engine) Dup() (dupFD int, err error) {
 	}
 
 	var sc string
-	dupFD, sc, err = ln.dup()
+	fd, sc, err = ln.dup()
 	if err != nil {
 		logging.Warnf("%s failed when duplicating new fd\n", sc)
 	}
@@ -93,20 +102,17 @@ func (s Engine) Dup() (dupFD int, err error) {
 
 // Stop gracefully shuts down this Engine without interrupting any active event-loops,
 // it waits indefinitely for connections and event-loops to be closed and then shuts down.
-func (s Engine) Stop(ctx context.Context) error {
-	if s.eng == nil {
-		return errors.ErrEmptyEngine
-	}
-	if s.eng.isInShutdown() {
-		return errors.ErrEngineInShutdown
+func (e Engine) Stop(ctx context.Context) error {
+	if err := e.Validate(); err != nil {
+		return err
 	}
 
-	s.eng.signalShutdown()
+	e.eng.shutdown(nil)
 
 	ticker := time.NewTicker(shutdownPollInterval)
 	defer ticker.Stop()
 	for {
-		if s.eng.isInShutdown() {
+		if e.eng.isInShutdown() {
 			return nil
 		}
 		select {
@@ -117,71 +123,126 @@ func (s Engine) Stop(ctx context.Context) error {
 	}
 }
 
-// AsyncWrite - AsyncWrite
-func (s Engine) AsyncWrite(connId int64, data []byte) error {
-	if s.eng == nil {
-		return errors.ErrEmptyEngine
-	}
+//// AsyncWrite - AsyncWrite
+//func (s Engine) AsyncWrite(connId int64, data []byte) error {
+//	if s.eng == nil {
+//		return errors.ErrEmptyEngine
+//	}
+//
+//	elidx := int(connId >> 48 & 0xffff)
+//	id := uint16(connId >> 32 & 0xffff)
+//	fd := int(connId & 0xffffffff)
+//
+//	s.eng.lb.iterate(func(i int, el *eventloop) bool {
+//		if i == elidx {
+//			_ = el.poller.Trigger(func(_ interface{}) error {
+//				if c, ok := el.connections[fd]; ok && c.id == id {
+//					if !c.opened {
+//						return nil
+//					}
+//					c.write(data)
+//				}
+//				return nil
+//			}, nil)
+//			return false
+//		}
+//		return true
+//	})
+//
+//	return nil
+//}
+//
+//// Trigger - Trigger
+//func (s Engine) Trigger(connId int64, cb func(c Conn)) {
+//	if s.eng == nil {
+//		return
+//	}
+//
+//	if cb == nil {
+//		return
+//	}
+//
+//	elidx := int(connId >> 48 & 0xffff)
+//	id := uint16(connId >> 32 & 0xffff)
+//	fd := int(connId & 0xffffffff)
+//
+//	s.eng.lb.iterate(func(i int, el *eventloop) bool {
+//		if i == elidx {
+//			_ = el.poller.Trigger(func(_ interface{}) error {
+//				if c, ok := el.connections[fd]; ok && id == c.id {
+//					if c.opened {
+//						cb(c)
+//					}
+//				}
+//				return nil
+//			}, nil)
+//			return false
+//		}
+//		return true
+//	})
+//}
 
-	elidx := int(connId >> 48 & 0xffff)
-	id := uint16(connId >> 32 & 0xffff)
-	fd := int(connId & 0xffffffff)
+/*
+type asyncCmdType uint8
 
-	s.eng.lb.iterate(func(i int, el *eventloop) bool {
-		if i == elidx {
-			_ = el.poller.Trigger(func(_ interface{}) error {
-				if c, ok := el.connections[fd]; ok && c.id == id {
-					if !c.opened {
-						return nil
-					}
-					c.write(data)
-				}
-				return nil
-			}, nil)
-			return false
-		}
-		return true
-	})
+const (
+	asyncCmdClose = iota + 1
+	asyncCmdWake
+	asyncCmdWrite
+	asyncCmdWritev
+)
 
-	return nil
+type asyncCmd struct {
+	fd  gfd.GFD
+	typ asyncCmdType
+	cb  AsyncCallback
+	arg interface{}
 }
 
-// Trigger - Trigger
-func (s Engine) Trigger(connId int64, cb func(c Conn)) {
-	if s.eng == nil {
-		return
+// AsyncWrite writes data to the given connection asynchronously.
+func (e Engine) AsyncWrite(fd gfd.GFD, p []byte, cb AsyncCallback) error {
+	if err := e.Validate(); err != nil {
+		return err
 	}
 
-	if cb == nil {
-		return
-	}
-
-	elidx := int(connId >> 48 & 0xffff)
-	id := uint16(connId >> 32 & 0xffff)
-	fd := int(connId & 0xffffffff)
-
-	s.eng.lb.iterate(func(i int, el *eventloop) bool {
-		if i == elidx {
-			_ = el.poller.Trigger(func(_ interface{}) error {
-				if c, ok := el.connections[fd]; ok && id == c.id {
-					if c.opened {
-						cb(c)
-					}
-				}
-				return nil
-			}, nil)
-			return false
-		}
-		return true
-	})
+	return e.eng.sendCmd(&asyncCmd{fd: fd, typ: asyncCmdWrite, cb: cb, arg: p}, false)
 }
+
+// AsyncWritev is like AsyncWrite, but it accepts a slice of byte slices.
+func (e Engine) AsyncWritev(fd gfd.GFD, batch [][]byte, cb AsyncCallback) error {
+	if err := e.Validate(); err != nil {
+		return err
+	}
+
+	return e.eng.sendCmd(&asyncCmd{fd: fd, typ: asyncCmdWritev, cb: cb, arg: batch}, false)
+}
+
+// Close closes the given connection.
+func (e Engine) Close(fd gfd.GFD, cb AsyncCallback) error {
+	if err := e.Validate(); err != nil {
+		return err
+	}
+
+	return e.eng.sendCmd(&asyncCmd{fd: fd, typ: asyncCmdClose, cb: cb}, false)
+}
+
+// Wake wakes up the given connection.
+func (e Engine) Wake(fd gfd.GFD, cb AsyncCallback) error {
+	if err := e.Validate(); err != nil {
+		return err
+	}
+
+	return e.eng.sendCmd(&asyncCmd{fd: fd, typ: asyncCmdWake, cb: cb}, true)
+}
+*/
 
 // Reader is an interface that consists of a number of methods for reading that Conn must implement.
+//
+// Note that the methods in this interface are not goroutine-safe for concurrent use,
+// you must invoke them within any method in EventHandler.
 type Reader interface {
-	// ================================== Non-concurrency-safe API's ==================================
-
 	io.Reader
-	io.WriterTo // must be non-blocking, otherwise it may block the event-loop.
+	io.WriterTo
 
 	// Next returns a slice containing the next n bytes from the buffer,
 	// advancing the buffer as if the bytes had been returned by Read.
@@ -218,28 +279,35 @@ type Reader interface {
 
 // Writer is an interface that consists of a number of methods for writing that Conn must implement.
 type Writer interface {
-	// ================================== Non-concurrency-safe API's ==================================
+	io.Writer     // not goroutine-safe
+	io.ReaderFrom // not goroutine-safe
 
-	io.Writer
-	io.ReaderFrom // must be non-blocking, otherwise it may block the event-loop.
-
-	// Writev writes multiple byte slices to peer synchronously, you must call it in the current goroutine.
+	// Writev writes multiple byte slices to peer synchronously, it's not goroutine-safe,
+	// you must invoke it within any method in EventHandler.
 	Writev(bs [][]byte) (n int, err error)
 
-	// Flush writes any buffered data to the underlying connection, you must call it in the current goroutine.
+	// Flush writes any buffered data to the underlying connection, it's not goroutine-safe,
+	// you must invoke it within any method in EventHandler.
 	Flush() (err error)
 
 	// OutboundBuffered returns the number of bytes that can be read from the current buffer.
+	// it's not goroutine-safe, you must invoke it within any method in EventHandler.
 	OutboundBuffered() (n int)
 
-	// ==================================== Concurrency-safe API's ====================================
-
-	// AsyncWrite writes one byte slice to peer asynchronously, usually you would call it in individual goroutines
-	// instead of the event-loop goroutines.
+	// AsyncWrite writes bytes to peer asynchronously, it's goroutine-safe,
+	// you don't have to invoke it within any method in EventHandler,
+	// usually you would call it in an individual goroutine.
+	//
+	// Note that it will go synchronously with UDP, so it is needless to call
+	// this asynchronous method, we may disable this method for UDP and just
+	// return ErrUnsupportedOp in the future, therefore, please don't rely on
+	// this method to do something important under UDP, if you're working with UDP,
+	// just call Conn.Write to send back your data.
 	AsyncWrite(buf []byte, callback AsyncCallback) (err error)
 
-	// AsyncWritev writes multiple byte slices to peer asynchronously, usually you would call it in individual goroutines
-	// instead of the event-loop goroutines.
+	// AsyncWritev writes multiple byte slices to peer asynchronously,
+	// you don't have to invoke it within any method in EventHandler,
+	// usually you would call it in an individual goroutine.
 	AsyncWritev(bs [][]byte, callback AsyncCallback) (err error)
 }
 
@@ -249,7 +317,13 @@ type Writer interface {
 type AsyncCallback func(c Conn, err error) error
 
 // Socket is a set of functions which manipulate the underlying file descriptor of a connection.
+//
+// Note that the methods in this interface are goroutine-safe for concurrent use,
+// you don't have to invoke them within any method in EventHandler.
 type Socket interface {
+	// Gfd returns the gfd of socket.
+	// Gfd() gfd.GFD
+
 	// Fd returns the underlying file descriptor.
 	Fd() int
 
@@ -299,23 +373,36 @@ type Socket interface {
 
 // Conn is an interface of underlying connection.
 type Conn interface {
-	Reader
-	Writer
-	Socket
+	Reader // all methods in Reader are not goroutine-safe.
+	Writer // some methods in Writer are goroutine-safe, some are not.
+	Socket // all methods in Socket are goroutine-safe.
 
-	// ================================== Non-concurrency-safe API's ==================================
-
-	// Context returns a user-defined context.
+	// Context returns a user-defined context, it's not goroutine-safe,
+	// you must invoke it within any method in EventHandler.
 	Context() (ctx interface{})
 
-	// SetContext sets a user-defined context.
+	// SetContext sets a user-defined context, it's not goroutine-safe,
+	// you must invoke it within any method in EventHandler.
 	SetContext(ctx interface{})
 
-	// LocalAddr is the connection's local socket address.
+	// LocalAddr is the connection's local socket address, it's not goroutine-safe,
+	// you must invoke it within any method in EventHandler.
 	LocalAddr() (addr net.Addr)
 
-	// RemoteAddr is the connection's remote peer address.
+	// RemoteAddr is the connection's remote peer address, it's not goroutine-safe,
+	// you must invoke it within any method in EventHandler.
 	RemoteAddr() (addr net.Addr)
+
+	// Wake triggers a OnTraffic event for the current connection, it's goroutine-safe.
+	Wake(callback AsyncCallback) (err error)
+
+	// CloseWithCallback closes the current connection, it's goroutine-safe.
+	// Usually you should provide a non-nil callback for this method,
+	// otherwise your better choice is Close().
+	CloseWithCallback(callback AsyncCallback) (err error)
+
+	// Close closes the current connection, implements net.Conn, it's goroutine-safe.
+	Close() (err error)
 
 	// SetDeadline implements net.Conn.
 	SetDeadline(t time.Time) (err error)
@@ -325,18 +412,6 @@ type Conn interface {
 
 	// SetWriteDeadline implements net.Conn.
 	SetWriteDeadline(t time.Time) (err error)
-
-	// ==================================== Concurrency-safe API's ====================================
-
-	// Wake triggers a OnTraffic event for the connection.
-	Wake(callback AsyncCallback) (err error)
-
-	// CloseWithCallback closes the current connection, usually you don't need to pass a non-nil callback
-	// because you should use OnClose() instead, the callback here is only for compatibility.
-	CloseWithCallback(callback AsyncCallback) (err error)
-
-	// Close closes the current connection, implements net.Conn.
-	Close() (err error)
 
 	// ConnID ConnID
 	ConnID() int64
@@ -515,7 +590,7 @@ func Stop(ctx context.Context, addrs string) error {
 	var eng *engine
 	if s, ok := allEngines.Load(addrs); ok {
 		eng = s.(*engine)
-		eng.signalShutdown()
+		eng.shutdown(nil)
 		defer allEngines.Delete(addrs)
 	} else {
 		return errors.ErrEngineInShutdown
@@ -548,11 +623,4 @@ func parseProtoAddr(addr string) (network, address string) {
 		address = pair[1]
 	}
 	return
-}
-
-func bool2int(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }

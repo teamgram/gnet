@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Andy Pan
+// Copyright (c) 2020 The Gnet Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build linux || freebsd || dragonfly
-// +build linux freebsd dragonfly
+//go:build linux || freebsd || dragonfly || netbsd || openbsd
+// +build linux freebsd dragonfly netbsd openbsd
 
 package socket
 
@@ -21,4 +21,8 @@ import "golang.org/x/sys/unix"
 
 func sysSocket(family, sotype, proto int) (int, error) {
 	return unix.Socket(family, sotype|unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC, proto)
+}
+
+func sysAccept(fd int) (nfd int, sa unix.Sockaddr, err error) {
+	return unix.Accept4(fd, unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC)
 }

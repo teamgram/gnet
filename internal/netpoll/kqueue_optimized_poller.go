@@ -1,4 +1,4 @@
-// Copyright (c) 2021 Andy Pan
+// Copyright (c) 2021 The Gnet Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build (freebsd || dragonfly || darwin) && poll_opt
-// +build freebsd dragonfly darwin
+//go:build (freebsd || dragonfly || netbsd || openbsd || darwin) && poll_opt
+// +build freebsd dragonfly netbsd openbsd darwin
 // +build poll_opt
 
 package netpoll
@@ -33,10 +33,11 @@ import (
 
 // Poller represents a poller which is in charge of monitoring file-descriptors.
 type Poller struct {
-	fd                   int
-	wakeupCall           int32
-	asyncTaskQueue       queue.AsyncTaskQueue // queue with low priority
-	urgentAsyncTaskQueue queue.AsyncTaskQueue // queue with high priority
+	fd                          int
+	wakeupCall                  int32
+	asyncTaskQueue              queue.AsyncTaskQueue // queue with low priority
+	urgentAsyncTaskQueue        queue.AsyncTaskQueue // queue with high priority
+	highPriorityEventsThreshold int32                // threshold of high-priority events
 }
 
 // OpenPoller instantiates a poller.
@@ -59,6 +60,7 @@ func OpenPoller() (poller *Poller, err error) {
 	}
 	poller.asyncTaskQueue = queue.NewLockFreeQueue()
 	poller.urgentAsyncTaskQueue = queue.NewLockFreeQueue()
+	poller.highPriorityEventsThreshold = MaxPollEventsCap
 	return
 }
 
@@ -73,31 +75,22 @@ var note = []unix.Kevent_t{{
 	Fflags: unix.NOTE_TRIGGER,
 }}
 
-// UrgentTrigger puts task into urgentAsyncTaskQueue and wakes up the poller which is waiting for network-events,
-// then the poller will get tasks from urgentAsyncTaskQueue and run them.
+// Trigger enqueues task and wakes up the poller to process pending tasks.
+// By default, any incoming task will enqueued into urgentAsyncTaskQueue
+// before the threshold of high-priority events is reached. When it happens,
+// any asks other than high-priority tasks will be shunted to asyncTaskQueue.
 //
-// Note that urgentAsyncTaskQueue is a queue with high-priority and its size is expected to be small,
-// so only those urgent tasks should be put into this queue.
-func (p *Poller) UrgentTrigger(fn queue.TaskFunc, arg interface{}) (err error) {
+// Note that asyncTaskQueue is a queue of low-priority whose size may grow large and tasks in it may backlog.
+func (p *Poller) Trigger(priority queue.EventPriority, fn queue.TaskFunc, arg interface{}) (err error) {
 	task := queue.GetTask()
 	task.Run, task.Arg = fn, arg
-	p.urgentAsyncTaskQueue.Enqueue(task)
-	if atomic.CompareAndSwapInt32(&p.wakeupCall, 0, 1) {
-		if _, err = unix.Kevent(p.fd, note, nil, nil); err == unix.EAGAIN {
-			err = nil
-		}
+	if priority > queue.HighPriority && p.urgentAsyncTaskQueue.Length() >= p.highPriorityEventsThreshold {
+		p.asyncTaskQueue.Enqueue(task)
+	} else {
+		// There might be some low-priority tasks overflowing into urgentAsyncTaskQueue in a flash,
+		// but that's tolerable because it ought to be a rare case.
+		p.urgentAsyncTaskQueue.Enqueue(task)
 	}
-	return os.NewSyscallError("kevent trigger", err)
-}
-
-// Trigger is like UrgentTrigger but it puts task into asyncTaskQueue,
-// call this method when the task is not so urgent, for instance writing data back to the peer.
-//
-// Note that asyncTaskQueue is a queue with low-priority whose size may grow large and tasks in it may backlog.
-func (p *Poller) Trigger(fn queue.TaskFunc, arg interface{}) (err error) {
-	task := queue.GetTask()
-	task.Run, task.Arg = fn, arg
-	p.asyncTaskQueue.Enqueue(task)
 	if atomic.CompareAndSwapInt32(&p.wakeupCall, 0, 1) {
 		if _, err = unix.Kevent(p.fd, note, nil, nil); err == unix.EAGAIN {
 			err = nil
@@ -127,24 +120,19 @@ func (p *Poller) Polling() error {
 		}
 		tsp = &ts
 
-		var evFilter int16
 		for i := 0; i < n; i++ {
 			ev := &el.events[i]
-			if ev.Ident != 0 {
-				evFilter = ev.Filter
-				if (ev.Flags&unix.EV_EOF != 0) || (ev.Flags&unix.EV_ERROR != 0) {
-					evFilter = EVFilterSock
-				}
+			if ev.Ident == 0 { // poller is awakened to run tasks in queues
+				doChores = true
+			} else {
 				pollAttachment := (*PollAttachment)(unsafe.Pointer(ev.Udata))
-				switch err = pollAttachment.Callback(int(ev.Ident), evFilter); err {
+				switch err = pollAttachment.Callback(int(ev.Ident), ev.Filter, ev.Flags); err {
 				case nil:
 				case errors.ErrAcceptSocket, errors.ErrEngineShutdown:
 					return err
 				default:
 					logging.Warnf("error occurs in event-loop: %v", err)
 				}
-			} else { // poller is awakened to run tasks in queues.
-				doChores = true
 			}
 		}
 

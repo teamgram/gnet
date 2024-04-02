@@ -3,10 +3,9 @@
 <br />
 <a title="Build Status" target="_blank" href="https://github.com/panjf2000/gnet/actions?query=workflow%3ATests"><img src="https://img.shields.io/github/actions/workflow/status/panjf2000/gnet/test.yml?branch=dev&style=flat-square&logo=github-actions" /></a>
 <a title="Codecov" target="_blank" href="https://codecov.io/gh/panjf2000/gnet"><img src="https://img.shields.io/codecov/c/github/panjf2000/gnet?style=flat-square&logo=codecov" /></a>
-<a title="Supported Platforms" target="_blank" href="https://github.com/panjf2000/gnet"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20FreeBSD%20%7C%20DragonFly%20%7C%20Darwin-549688?style=flat-square&logo=launchpad" /></a>
-<a title="Require Go Version" target="_blank" href="https://github.com/panjf2000/gnet"><img src="https://img.shields.io/badge/go-%3E%3D1.9-30dff3?style=flat-square&logo=go" /></a>
+<a title="Supported Platforms" target="_blank" href="https://github.com/panjf2000/gnet"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20FreeBSD%20%7C%20DragonFly%20%7C%20NetBSD%20%7C%20OpenBSD%20%7C%20Darwin%20%7C%20Windows-549688?style=flat-square&logo=launchpad" /></a>
+<a title="Require Go Version" target="_blank" href="https://github.com/panjf2000/gnet"><img src="https://img.shields.io/badge/go-%3E%3D1.17-30dff3?style=flat-square&logo=go" /></a>
 <br />
-<a title="Chat Room" target="_blank" href="https://gitter.im/gnet-io/gnet?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=body_badge"><img src="https://badges.gitter.im/gnet-io/gnet.svg" /></a>
 <a title="Go Report Card" target="_blank" href="https://goreportcard.com/report/github.com/panjf2000/gnet"><img src="https://goreportcard.com/badge/github.com/panjf2000/gnet?style=flat-square" /></a>
 <a title="Doc for gnet" target="_blank" href="https://pkg.go.dev/github.com/panjf2000/gnet/v2#section-documentation"><img src="https://img.shields.io/badge/go.dev-doc-007d9c?style=flat-square&logo=read-the-docs" /></a>
 <a title="Mentioned in Awesome Go" target="_blank" href="https://github.com/avelino/awesome-go#networking"><img src="https://awesome.re/mentioned-badge-flat.svg" /></a>
@@ -16,45 +15,50 @@
 
 [英文](README.md) | 中文
 
+### 🎉🎉🎉 欢迎加入 `gnet` 在 [Discord 服务器上的频道](https://discord.gg/UyKD7NZcfH).
+
 # 📖 简介
 
-`gnet` 是一个基于事件驱动的高性能和轻量级网络框架。它直接使用 [epoll](https://en.wikipedia.org/wiki/Epoll) 和 [kqueue](https://en.wikipedia.org/wiki/Kqueue) 系统调用而非标准 Go 网络包：[net](https://golang.org/pkg/net/) 来构建网络应用，它的工作原理类似两个开源的网络库：[netty](https://github.com/netty/netty) 和 [libuv](https://github.com/libuv/libuv)，这也使得 `gnet` 达到了一个远超 Go [net](https://golang.org/pkg/net/) 的性能表现。
+`gnet` 是一个基于事件驱动的高性能和轻量级网络框架。这个框架是基于 [epoll](https://en.wikipedia.org/wiki/Epoll) 和 [kqueue](https://en.wikipedia.org/wiki/Kqueue) 从零开发的，而且相比 Go [net](https://golang.org/pkg/net/)，它能以更低的内存占用实现更高的性能。
 
-`gnet` 设计开发的初衷不是为了取代 Go 的标准网络库：[net](https://golang.org/pkg/net/)，而是为了创造出一个类似于 [Redis](http://redis.io)、[Haproxy](http://www.haproxy.org) 能高效处理网络包的 Go 语言网络客户端/服务器框架。因此，`gnet` 在功能上的全面性并不如 [net](https://golang.org/pkg/net/)，它只提供网络编程中最核心的功能和最精简的 APIs，而且 `gnet` 也并没有打算变成一个全功能、无所不包的网络库，因为我觉得 Go [net](https://golang.org/pkg/net/) 在这方面已经做得足够好了。
+`gnet` 和 [net](https://golang.org/pkg/net/) 有着不一样的网络编程模式。因此，用 `gnet` 开发网络应用和用 [net](https://golang.org/pkg/net/) 开发区别很大，而且两者之间不可调和。社区里有其他同类的产品像是 [libevent](https://github.com/libevent/libevent), [libuv](https://github.com/libuv/libuv), [netty](https://github.com/netty/netty), [twisted](https://github.com/twisted/twisted), [tornado](https://github.com/tornadoweb/tornado)，`gnet` 的底层工作原理和这些框架非常类似。
 
-`gnet` 的卖点在于它是一个高性能、轻量级、非阻塞的纯 Go 实现的传输层（TCP/UDP/Unix Domain Socket）网络框架，开发者可以使用 `gnet` 来实现自己的应用层网络协议(HTTP、RPC、Redis、WebSocket 等等)，从而构建出自己的应用层网络应用：比如在 `gnet` 上实现 HTTP 协议就可以创建出一个 HTTP 服务器 或者 Web 开发框架，实现 Redis 协议就可以创建出自己的 Redis 服务器等等。
+`gnet` 不是为了取代 [net](https://golang.org/pkg/net/) 而生的，而是在 Go 生态中为开发者提供一个开发性能敏感的网络服务的替代品。也正因如此，`gnet` 在功能全面性上比不了 Go [net](https://golang.org/pkg/net/)，它只会提供网络应用所需的最核心的功能和最精简的 APIs，而且 `gnet` 也并没有打算变成一个无所不包的网络框架，因为我觉得 Go [net](https://golang.org/pkg/net/) 在这方面已经做得足够好了。
+
+`gnet` 的卖点在于它是一个高性能、轻量级、非阻塞的纯 Go 语言实现的传输层（TCP/UDP/Unix Domain Socket）网络框架。开发者可以使用 `gnet` 来实现自己的应用层网络协议(HTTP、RPC、Redis、WebSocket 等等)，从而构建出自己的应用层网络服务。比如在 `gnet` 上实现 HTTP 协议就可以创建出一个 HTTP 服务器 或者 Web 开发框架，实现 Redis 协议就可以创建出自己的 Redis 服务器等等。
 
 **`gnet` 衍生自另一个项目：`evio`，但拥有更丰富的功能特性，且性能远胜之。**
 
 # 🚀 功能
 
-- [x] [高性能](#-性能测试) 的基于多线程/Go程网络模型的 event-loop 事件驱动
+- [x] 基于多线程/协程网络模型的[高性能](#-性能测试)事件驱动循环
 - [x] 内置 goroutine 池，由开源库 [ants](https://github.com/panjf2000/ants) 提供支持
 - [x] 整个生命周期是无锁的
 - [x] 简单易用的 APIs
 - [x] 高效、可重用而且自动伸缩的内存 buffer：(Elastic-)Ring-Buffer, Linked-List-Buffer and Elastic-Mixed-Buffer
-- [x] 支持多种网络协议/IPC 机制：`TCP`、`UDP` 和 `Unix Domain Socket`
-- [x] 支持多种负载均衡算法：`Round-Robin(轮询)`、`Source-Addr-Hash(源地址哈希)` 和 `Least-Connections(最少连接数)`
-- [x] 支持两种事件驱动机制：**Linux** 里的 `epoll` 以及 **FreeBSD/DragonFly/Darwin** 里的 `kqueue`
+- [x] 多种网络协议/IPC 机制：`TCP`、`UDP` 和 `Unix Domain Socket`
+- [x] 多种负载均衡算法：`Round-Robin(轮询)`、`Source-Addr-Hash(源地址哈希)` 和 `Least-Connections(最少连接数)`
+- [x] 两种事件驱动机制：**Linux** 里的 `epoll` 以及 **FreeBSD/DragonFly/Darwin** 里的 `kqueue`
 - [x] 灵活的事件定时器
 - [x] 实现 `gnet` 客户端
-- [ ] 支持 **Windows** 平台 ([gnet v1](https://github.com/panjf2000/gnet/tree/1.x) 支持 Windows，v2 暂时不支持)
+- [x] 支持 **Windows** 平台 (仅用于开发环境的兼容性，不要在生产环境中使用)
+- [ ] 多网络地址绑定
 - [ ] 支持 **TLS**
 - [ ] 支持 [io_uring](https://kernel.dk/io_uring.pdf)
 
 # 🎬 开始
 
-`gnet` 是一个 Go module，而且我们也强烈推荐通过 [Go Modules](https://go.dev/blog/using-go-modules) 来使用 `gnet`，在开启 Go Modules 支持（Go 1.11+）之后可以通过简单地在代码中写 `import "github.com/panjf2000/gnet"` 来引入 `gnet`，然后执行 `go mod download/go mod tidy` 或者 `go [build|run|test]` 这些命令来自动下载所依赖的包。
+`gnet` 是一个 Go module，而且我们也强烈推荐通过 [Go Modules](https://go.dev/blog/using-go-modules) 来使用 `gnet`，在开启 Go Modules 支持（Go 1.11+）之后可以通过简单地在代码中写 `import "github.com/panjf2000/gnet/v2"` 来引入 `gnet`，然后执行 `go mod download/go mod tidy` 或者 `go [build|run|test]` 这些命令来自动下载所依赖的包。
 
 ## 使用 v2 
 
-```powershell
+```bash
 go get -u github.com/panjf2000/gnet/v2
 ```
 
 ## 使用 v1
 
-```powershell
+```bash
 go get -u github.com/panjf2000/gnet
 ```
 
@@ -62,7 +66,7 @@ go get -u github.com/panjf2000/gnet
 
 以下公司/组织在生产环境上使用了 `gnet` 作为底层网络服务。
 
-<a href="https://www.tencent.com"><img src="http://img.taohuawu.club/gallery/tencent_logo.png" width="250" align="middle"/></a>&nbsp;&nbsp;<a href="https://www.iqiyi.com" target="_blank"><img src="http://img.taohuawu.club/gallery/iqiyi-logo.png" width="200" align="middle"/></a>&nbsp;&nbsp;<a href="https://www.mi.com" target="_blank"><img src="http://img.taohuawu.club/gallery/mi-logo.png" width="150" align="middle"/></a>&nbsp;&nbsp;<a href="https://www.360.com" target="_blank"><img src="http://img.taohuawu.club/gallery/360-logo.png" width="200" align="middle"/></a>&nbsp;&nbsp;<a href="https://tieba.baidu.com/" target="_blank"><img src="http://img.taohuawu.club/gallery/baidu-tieba-logo.png" width="200" align="middle"/></a>&nbsp;&nbsp;<a href="https://game.qq.com/" target="_blank"><img src="http://img.taohuawu.club/gallery/tencent-games-logo.jpeg" width="200" align="middle"/></a>
+<a href="https://www.tencent.com"><img src="https://res.strikefreedom.top/static_res/logos/tencent_logo.png" width="250" align="middle"/></a>&nbsp;&nbsp;<a href="https://www.iqiyi.com" target="_blank"><img src="https://res.strikefreedom.top/static_res/logos/iqiyi-logo.png" width="200" align="middle"/></a>&nbsp;&nbsp;<a href="https://www.mi.com" target="_blank"><img src="https://res.strikefreedom.top/static_res/logos/mi-logo.png" width="150" align="middle"/></a>&nbsp;&nbsp;<a href="https://www.360.com" target="_blank"><img src="https://res.strikefreedom.top/static_res/logos/360-logo.png" width="200" align="middle"/></a>&nbsp;&nbsp;<a href="https://tieba.baidu.com/" target="_blank"><img src="https://res.strikefreedom.top/static_res/logos/baidu-tieba-logo.png" width="200" align="middle"/></a>&nbsp;&nbsp;<a href="https://game.qq.com/" target="_blank"><img src="https://res.strikefreedom.top/static_res/logos/tencent-games-logo.jpeg" width="200" align="middle"/></a>
 
 如果你的项目也在使用 `gnet`，欢迎给我提 Pull Request 来更新这份列表。
 
@@ -70,25 +74,26 @@ go get -u github.com/panjf2000/gnet
 
 ## TechEmpower 性能测试
 
-```powershell
+```bash
 # 硬件环境
-CPU: 28 HT Cores Intel(R) Xeon(R) Gold 5120 CPU @ 2.20GHz
-Mem: 32GB RAM
-OS : Ubuntu 18.04.3 4.15.0-88-generic #88-Ubuntu
-Net: Switched 10-gigabit ethernet
-Go : go1.14.x linux/amd64
+* 28 HT Cores Intel(R) Xeon(R) Gold 5120 CPU @ 3.20GHz
+* 32GB RAM
+* Dedicated Cisco 10-gigabit Ethernet switch
+* Debian 12 "bookworm"
+* Go1.19.x linux/amd64
 ```
 
-![All language](https://raw.githubusercontent.com/panjf2000/illustrations/master/benchmark/techempower-all.jpg)
+![](https://raw.githubusercontent.com/panjf2000/illustrations/master/benchmark/techempower-plaintext-top50-light.jpg)
 
-这是包含全部编程语言框架的性能排名***前 50*** 的结果，总榜单包含了全世界共计 ***422 个框架***，其中 `gnet` 排名***第二***。
+这是包含全部编程语言框架的性能排名***前 50*** 的结果，总榜单包含了全世界共计 ***486*** 个框架，其中 `gnet` 排名***第一***。
 
-
-![Golang](https://raw.githubusercontent.com/panjf2000/illustrations/master/benchmark/techempower-go.png)
+![](https://raw.githubusercontent.com/panjf2000/illustrations/master/benchmark/techempower-plaintext-topN-go-light.png)
 
 这是 Go 语言分类下的全部排名，`gnet` 超越了其他所有框架，位列第一，是***最快***的 Go 网络框架。
 
-完整的排行可以通过 [TechEmpower Plaintext Benchmark](https://www.techempower.com/benchmarks/#section=test&runid=53c6220a-e110-466c-a333-2e879fea21ad&hw=ph&test=plaintext) 查看。
+完整的排行可以通过 [TechEmpower Benchmark **Round 22**](https://www.techempower.com/benchmarks/#hw=ph&test=plaintext&section=data-r22) 查看。
+
+***请注意，TechEmpower 上的 gnet 的 HTTP 实现是不完备且针对性调优的，仅仅是用于压测目的，不是生产可用的***。
 
 ## 同类型的网络库性能对比
 
@@ -96,7 +101,7 @@ Go : go1.14.x linux/amd64
 
 ### Test Environment
 
-```powershell
+```bash
 # Machine information
         OS : Ubuntu 20.04/x86_64
        CPU : 8 CPU cores, AMD EPYC 7K62 48-Core Processor
@@ -122,7 +127,7 @@ Test duration   : 15s
 
 ### Test Environment
 
-```powershell
+```bash
 # Machine information
         OS : MacOS Big Sur/x86_64
        CPU : 6 CPU cores, Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz
@@ -152,7 +157,9 @@ Test duration   : 15s
 
 请在提 PR 之前仔细阅读 [Contributing Guidelines](CONTRIBUTING.md)，感谢那些为 `gnet` 贡献过代码的开发者！
 
-[![](https://opencollective.com/gnet/contributors.svg?width=890&button=false)](https://github.com/panjf2000/gnet/graphs/contributors)
+<a href="https://github.com/panjf2000/gnet/graphs/contributors">
+	<img src="https://contrib.rocks/image?repo=panjf2000/gnet" />
+</a>
 
 # ⚓ 相关文章
 
@@ -176,7 +183,7 @@ Test duration   : 15s
 
 # ☕️ 打赏
 
-> 当您通过以下方式进行捐赠时，请务必留下姓名、Github账号或其他社交媒体账号，以便我将其添加到捐赠者名单中，以表谢意。
+> 当您通过以下方式进行捐赠时，请务必留下姓名、GitHub 账号或其他社交媒体账号，以便我将其添加到捐赠者名单中，以表谢意。
 
 <img src="https://raw.githubusercontent.com/panjf2000/illustrations/master/payments/WeChatPay.JPG" width="250" align="middle"/>&nbsp;&nbsp;
 <img src="https://raw.githubusercontent.com/panjf2000/illustrations/master/payments/AliPay.JPG" width="250" align="middle"/>&nbsp;&nbsp;

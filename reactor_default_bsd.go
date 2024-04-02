@@ -1,4 +1,4 @@
-// Copyright (c) 2019 Andy Pan
+// Copyright (c) 2019 The Gnet Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,97 +12,116 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build (freebsd || dragonfly || darwin) && !poll_opt
-// +build freebsd dragonfly darwin
+//go:build (freebsd || dragonfly || netbsd || openbsd || darwin) && !poll_opt
+// +build freebsd dragonfly netbsd openbsd darwin
 // +build !poll_opt
 
 package gnet
 
 import (
+	"io"
 	"runtime"
-
-	"golang.org/x/sys/unix"
 
 	"github.com/panjf2000/gnet/v2/internal/netpoll"
 	"github.com/panjf2000/gnet/v2/pkg/errors"
 )
 
-func (el *eventloop) activateMainReactor(lockOSThread bool) {
-	if lockOSThread {
+func (el *eventloop) activateMainReactor() error {
+	if el.engine.opts.LockOSThread {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 	}
 
-	defer el.engine.signalShutdown()
-
-	err := el.poller.Polling(func(fd int, filter int16) error { return el.engine.accept(fd, filter) })
+	err := el.poller.Polling(el.engine.accept)
 	if err == errors.ErrEngineShutdown {
 		el.engine.opts.Logger.Debugf("main reactor is exiting in terms of the demand from user, %v", err)
+		err = nil
 	} else if err != nil {
 		el.engine.opts.Logger.Errorf("main reactor is exiting due to error: %v", err)
 	}
+
+	el.engine.shutdown(err)
+
+	return err
 }
 
-func (el *eventloop) activateSubReactor(lockOSThread bool) {
-	if lockOSThread {
+func (el *eventloop) activateSubReactor() error {
+	if el.engine.opts.LockOSThread {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 	}
 
-	defer func() {
-		el.closeAllSockets()
-		el.engine.signalShutdown()
-	}()
-
-	err := el.poller.Polling(func(fd int, filter int16) (err error) {
-		if c, ack := el.connections[fd]; ack {
-			switch filter {
-			case netpoll.EVFilterSock:
-				err = el.closeConn(c, unix.ECONNRESET)
-			case netpoll.EVFilterWrite:
-				if !c.outboundBuffer.IsEmpty() {
+	err := el.poller.Polling(func(fd int, filter int16, flags uint16) (err error) {
+		if c := el.connections.getConn(fd); c != nil {
+			switch {
+			case flags&netpoll.EVFlagsDelete != 0:
+			case flags&netpoll.EVFlagsEOF != 0:
+				switch {
+				case filter == netpoll.EVFilterRead: // read the remaining data after the peer wrote and closed immediately
+					err = el.read(c)
+				case filter == netpoll.EVFilterWrite && !c.outboundBuffer.IsEmpty():
 					err = el.write(c)
+				default:
+					err = el.close(c, io.EOF)
 				}
-			case netpoll.EVFilterRead:
+			case filter == netpoll.EVFilterRead:
 				err = el.read(c)
+			case filter == netpoll.EVFilterWrite && !c.outboundBuffer.IsEmpty():
+				err = el.write(c)
 			}
 		}
 		return
 	})
 	if err == errors.ErrEngineShutdown {
 		el.engine.opts.Logger.Debugf("event-loop(%d) is exiting in terms of the demand from user, %v", el.idx, err)
+		err = nil
 	} else if err != nil {
 		el.engine.opts.Logger.Errorf("event-loop(%d) is exiting due to error: %v", el.idx, err)
 	}
+
+	el.closeConns()
+	el.engine.shutdown(err)
+
+	return err
 }
 
-func (el *eventloop) run(lockOSThread bool) {
-	if lockOSThread {
+func (el *eventloop) run() error {
+	if el.engine.opts.LockOSThread {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 	}
 
-	defer func() {
-		el.closeAllSockets()
-		el.closeAllListeners()
-		el.engine.signalShutdown()
-	}()
-
-	err := el.poller.Polling(func(fd int, filter int16) (err error) {
-		if c, ack := el.connections[fd]; ack {
-			switch filter {
-			case netpoll.EVFilterSock:
-				err = el.closeConn(c, unix.ECONNRESET)
-			case netpoll.EVFilterWrite:
-				if !c.outboundBuffer.IsEmpty() {
+	err := el.poller.Polling(func(fd int, filter int16, flags uint16) (err error) {
+		if c := el.connections.getConn(fd); c != nil {
+			switch {
+			case flags&netpoll.EVFlagsDelete != 0:
+			case flags&netpoll.EVFlagsEOF != 0:
+				switch {
+				case filter == netpoll.EVFilterRead: // read the remaining data after the peer wrote and closed immediately
+					err = el.read(c)
+				case filter == netpoll.EVFilterWrite && !c.outboundBuffer.IsEmpty():
 					err = el.write(c)
+				default:
+					err = el.close(c, io.EOF)
 				}
-			case netpoll.EVFilterRead:
+			case filter == netpoll.EVFilterRead:
 				err = el.read(c)
+			case filter == netpoll.EVFilterWrite && !c.outboundBuffer.IsEmpty():
+				err = el.write(c)
 			}
 			return
 		}
-		return el.accept(fd, filter)
+		return el.accept(fd, filter, flags)
 	})
-	el.getLogger().Debugf("event-loop(%d) is exiting due to error: %v", el.idx, err)
+	if err == errors.ErrEngineShutdown {
+		el.engine.opts.Logger.Debugf("event-loop(%d) is exiting in terms of the demand from user, %v", el.idx, err)
+		err = nil
+	} else if err != nil {
+		el.engine.opts.Logger.Errorf("event-loop(%d) is exiting due to error: %v", el.idx, err)
+	}
+
+	el.closeConns()
+	el.engine.shutdown(err)
+
+	return err
 }

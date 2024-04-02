@@ -1,4 +1,4 @@
-// Copyright (c) 2021 Andy Pan
+// Copyright (c) 2021 The Gnet Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ import (
 	"math"
 
 	"github.com/panjf2000/gnet/v2/pkg/buffer/linkedlist"
-	gerrors "github.com/panjf2000/gnet/v2/pkg/errors"
+	errorx "github.com/panjf2000/gnet/v2/pkg/errors"
 )
 
 // Buffer combines ring-buffer and list-buffer.
@@ -35,7 +35,7 @@ type Buffer struct {
 // New instantiates an elastic.Buffer and returns it.
 func New(maxStaticBytes int) (*Buffer, error) {
 	if maxStaticBytes <= 0 {
-		return nil, gerrors.ErrNegativeSize
+		return nil, errorx.ErrNegativeSize
 	}
 	return &Buffer{maxStaticBytes: maxStaticBytes}, nil
 }

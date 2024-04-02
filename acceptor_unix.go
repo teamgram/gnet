@@ -1,4 +1,4 @@
-// Copyright (c) 2021 Andy Pan
+// Copyright (c) 2021 The Gnet Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,25 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build linux || freebsd || dragonfly || darwin
-// +build linux freebsd dragonfly darwin
+//go:build linux || freebsd || dragonfly || netbsd || openbsd || darwin
+// +build linux freebsd dragonfly netbsd openbsd darwin
 
 package gnet
 
 import (
-	"os"
 	"time"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/panjf2000/gnet/v2/internal/netpoll"
+	"github.com/panjf2000/gnet/v2/internal/queue"
 	"github.com/panjf2000/gnet/v2/internal/socket"
 	"github.com/panjf2000/gnet/v2/pkg/errors"
 	"github.com/panjf2000/gnet/v2/pkg/logging"
 )
 
-func (eng *engine) accept(fd int, _ netpoll.IOEvent) error {
-	nfd, sa, err := unix.Accept(fd)
+func (eng *engine) accept1(fd int, _ netpoll.IOEvent, _ netpoll.IOFlags) error {
+	nfd, sa, err := socket.Accept(fd)
 	if err != nil {
 		switch err {
 		case unix.EINTR, unix.EAGAIN, unix.ECONNABORTED:
@@ -44,10 +44,6 @@ func (eng *engine) accept(fd int, _ netpoll.IOEvent) error {
 		}
 	}
 
-	if err = os.NewSyscallError("fcntl nonblock", unix.SetNonblock(nfd, true)); err != nil {
-		return err
-	}
-
 	ln := eng.listeners[fd]
 	remoteAddr := socket.SockaddrToTCPOrUnixAddr(sa)
 	if eng.opts.TCPKeepAlive > 0 && ln.network == "tcp" {
@@ -55,26 +51,24 @@ func (eng *engine) accept(fd int, _ netpoll.IOEvent) error {
 		logging.Error(err)
 	}
 
-	el := eng.lb.next(remoteAddr)
+	el := eng.eventLoops.next(remoteAddr)
 	c := newTCPConn(nfd, el, sa, el.listeners[fd].addr, remoteAddr)
-
-	err = el.poller.UrgentTrigger(el.register, c)
+	err = el.poller.Trigger(queue.HighPriority, el.register, c)
 	if err != nil {
-		eng.opts.Logger.Errorf("UrgentTrigger() failed due to error: %v", err)
+		eng.opts.Logger.Errorf("failed to enqueue accepted socket of high-priority: %v", err)
 		_ = unix.Close(nfd)
-		c.releaseTCP()
+		c.release()
 	}
-
 	return nil
 }
 
-func (el *eventloop) accept(fd int, ev netpoll.IOEvent) error {
+func (el *eventloop) accept1(fd int, ev netpoll.IOEvent, flags netpoll.IOFlags) error {
 	ln := el.listeners[fd]
 	if len(el.listeners) == 0 || ln.network == "udp" {
-		return el.readUDP(fd, ev)
+		return el.readUDP1(fd, ev, flags)
 	}
 
-	nfd, sa, err := unix.Accept(fd)
+	nfd, sa, err := socket.Accept(fd)
 	if err != nil {
 		switch err {
 		case unix.EINTR, unix.EAGAIN, unix.ECONNABORTED:
@@ -88,9 +82,6 @@ func (el *eventloop) accept(fd int, ev netpoll.IOEvent) error {
 		}
 	}
 
-	if err = os.NewSyscallError("fcntl nonblock", unix.SetNonblock(nfd, true)); err != nil {
-		return err
-	}
 	remoteAddr := socket.SockaddrToTCPOrUnixAddr(sa)
 	if el.engine.opts.TCPKeepAlive > 0 && ln.network == "tcp" {
 		err = socket.SetKeepAlivePeriod(nfd, int(el.engine.opts.TCPKeepAlive/time.Second))
@@ -98,10 +89,9 @@ func (el *eventloop) accept(fd int, ev netpoll.IOEvent) error {
 	}
 
 	c := newTCPConn(nfd, el, sa, ln.addr, remoteAddr)
-	if err = el.poller.AddRead(c.pollAttachment); err != nil {
+	if err = el.poller.AddRead(&c.pollAttachment); err != nil {
 		return err
 	}
-	el.connections[c.fd] = c
-
+	el.connections.addConn(c, el.idx)
 	return el.open(c)
 }

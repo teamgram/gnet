@@ -1,4 +1,4 @@
-// Copyright (c) 2020 Andy Pan
+// Copyright (c) 2020 The Gnet Authors. All rights reserved.
 // Copyright (c) 2017 Ma Weiwei, Max Riveiro
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,8 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build freebsd || dragonfly || darwin
-// +build freebsd dragonfly darwin
+//go:build freebsd || dragonfly || netbsd || openbsd || darwin
+// +build freebsd dragonfly netbsd openbsd darwin
 
 package socket
 

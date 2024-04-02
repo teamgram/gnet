@@ -1,4 +1,4 @@
-// Copyright (c) 2021 Andy Pan
+// Copyright (c) 2021 The Gnet Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -155,6 +155,10 @@ retry:
 // IsEmpty indicates whether this queue is empty or not.
 func (q *lockFreeQueue) IsEmpty() bool {
 	return atomic.LoadInt32(&q.length) == 0
+}
+
+func (q *lockFreeQueue) Length() int32 {
+	return atomic.LoadInt32(&q.length)
 }
 
 func load(p *unsafe.Pointer) (n *node) {

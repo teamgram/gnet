@@ -1,4 +1,4 @@
-// Copyright (c) 2019 Andy Pan
+// Copyright (c) 2019 The Gnet Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build freebsd || dragonfly || darwin
-// +build freebsd dragonfly darwin
+//go:build freebsd || dragonfly || netbsd || openbsd || darwin
+// +build freebsd dragonfly netbsd openbsd darwin
 
 package netpoll
 
@@ -35,9 +35,10 @@ const (
 	EVFilterWrite = unix.EVFILT_WRITE
 	// EVFilterRead represents readable events from sockets.
 	EVFilterRead = unix.EVFILT_READ
-	// EVFilterSock represents exceptional events that are not read/write, like socket being closed,
-	// reading/writing from/to a closed socket, etc.
-	EVFilterSock = -0xd
+	// EVFlagsDelete indicates an event has been removed from the kqueue.
+	EVFlagsDelete = unix.EV_DELETE
+	// EVFlagsEOF indicates filter-specific EOF condition.
+	EVFlagsEOF = unix.EV_EOF
 )
 
 type eventList struct {
