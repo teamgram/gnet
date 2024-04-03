@@ -137,8 +137,7 @@ func (s Engine) AsyncWrite(connId int64, data []byte) error {
 	s.eng.eventLoops.iterate(func(i int, el *eventloop) bool {
 		if i == elidx {
 			_ = el.poller.Trigger(queue.HighPriority, func(_ interface{}) error {
-				c := el.connections.getConn(fd)
-				if c.id == id {
+				if c := el.connections.getConn(fd); c != nil && c.id == id {
 					if !c.opened {
 						return nil
 					}
@@ -172,8 +171,7 @@ func (s Engine) Trigger(connId int64, cb func(c Conn)) {
 	s.eng.eventLoops.iterate(func(i int, el *eventloop) bool {
 		if i == elidx {
 			_ = el.poller.Trigger(queue.HighPriority, func(_ interface{}) error {
-				c := el.connections.getConn(fd)
-				if id == c.id {
+				if c := el.connections.getConn(fd); c != nil && c.id == id {
 					if c.opened {
 						cb(c)
 					}
