@@ -75,7 +75,9 @@ func (eng *engine) startEventLoops() {
 
 func (eng *engine) closeEventLoops() {
 	eng.eventLoops.iterate(func(_ int, el *eventloop) bool {
-		el.ln.close()
+		for _, ln := range el.listeners {
+			ln.close()
+		}
 		_ = el.poller.Close()
 		return true
 	})
