@@ -569,12 +569,19 @@ func Run(eventHandler EventHandler, addrs string, opts ...Option) (err error) {
 		network, addr := parseProtoAddr(protoAddr)
 		var ln *listener
 		if ln, err = initListener(network, addr, options); err != nil {
+			for _, ln2 := range listeners {
+				ln2.close()
+			}
 			return
 		}
 		listeners[ln.fd] = ln
-		defer ln.close()
 	}
 
+	defer func() {
+		for _, ln := range listeners {
+			ln.close()
+		}
+	}()
 	return run(eventHandler, listeners, options, addrs)
 }
 

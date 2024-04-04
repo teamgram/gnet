@@ -68,12 +68,6 @@ type connWithCallback struct {
 	cb func()
 }
 
-func (el *eventloop) closeAllListeners() {
-	for _, ln := range el.listeners {
-		ln.close()
-	}
-}
-
 func (el *eventloop) register(itf interface{}) error {
 	c, ok := itf.(*conn)
 	if !ok {
