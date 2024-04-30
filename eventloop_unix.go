@@ -45,6 +45,7 @@ type eventloop struct {
 	buffer       []byte            // read packet buffer whose capacity is set by user, default value is 64KB
 	connections  connMatrix        // loop connections storage
 	eventHandler EventHandler      // user eventHandler
+	next         uint16
 }
 
 func (el *eventloop) getLogger() logging.Logger {

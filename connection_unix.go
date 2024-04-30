@@ -18,6 +18,7 @@
 package gnet
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -52,6 +53,9 @@ type conn struct {
 	isDatagram     bool                   // UDP protocol
 	opened         bool                   // connection opened event fired
 	isEOF          bool                   // whether the connection has reached EOF
+	connId         int64
+	id             uint16
+	debugString    string
 }
 
 func newTCPConn(fd int, el *eventloop, sa unix.Sockaddr, localAddr, remoteAddr net.Addr) (c *conn) {
@@ -62,7 +66,10 @@ func newTCPConn(fd int, el *eventloop, sa unix.Sockaddr, localAddr, remoteAddr n
 		localAddr:      localAddr,
 		remoteAddr:     remoteAddr,
 		pollAttachment: netpoll.PollAttachment{FD: fd},
+		id:             el.next,
+		connId:         int64(el.idx)<<48 | int64(el.next)<<32 | int64(fd),
 	}
+	el.next = el.next + 1
 	c.pollAttachment.Callback = c.processIO
 	c.outboundBuffer.Reset(el.engine.opts.WriteBufferCap)
 	return
@@ -78,7 +85,10 @@ func newUDPConn(fd int, el *eventloop, localAddr net.Addr, sa unix.Sockaddr, con
 		remoteAddr:     socket.SockaddrToUDPAddr(sa),
 		isDatagram:     true,
 		pollAttachment: netpoll.PollAttachment{FD: fd, Callback: el.readUDP},
+		id:             el.next,
+		connId:         int64(el.idx)<<48 | int64(el.next)<<32 | int64(fd),
 	}
+	el.next = el.next + 1
 	if connected {
 		c.remote = nil
 	}
@@ -527,4 +537,15 @@ func (*conn) SetReadDeadline(_ time.Time) error {
 
 func (*conn) SetWriteDeadline(_ time.Time) error {
 	return errorx.ErrUnsupportedOp
+}
+
+func (c *conn) ConnId() int64 {
+	return c.connId
+}
+
+func (c *conn) String() string {
+	if c.debugString == "" {
+		c.debugString = fmt.Sprintf("%d@(%s->%s)", c.connId, c.remoteAddr.String(), c.localAddr.String())
+	}
+	return c.debugString
 }

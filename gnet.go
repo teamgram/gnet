@@ -338,6 +338,11 @@ type Conn interface {
 
 	// SetWriteDeadline implements net.Conn.
 	SetWriteDeadline(t time.Time) (err error)
+
+	// ConnId returns the connection Id, t's concurrency-safe.
+	ConnId() int64
+
+	String() string
 }
 
 type (
