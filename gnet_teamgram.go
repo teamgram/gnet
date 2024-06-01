@@ -70,3 +70,21 @@ func (e Engine) Trigger(connId int64, cb func(c Conn)) {
 		return true
 	})
 }
+
+// Iterate - iterate all conns
+func (e Engine) Iterate(cb func(c Conn)) {
+	if e.Validate() != nil {
+		return
+	}
+
+	e.eng.eventLoops.iterate(func(_ int, el *eventloop) bool {
+		_ = el.poller.Trigger(queue.LowPriority, func(_ interface{}) error {
+			el.connections.iterate(func(c *conn) bool {
+				cb(c)
+				return true
+			})
+			return nil
+		}, nil)
+		return true
+	})
+}
