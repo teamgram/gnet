@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	crand "crypto/rand"
 	"encoding/binary"
 	"errors"
 	"io"
 	"math/rand"
 	"net"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -500,9 +502,8 @@ func (s *testServer) OnClose(c Conn, err error) (action Action) {
 	if err != nil {
 		logging.Debugf("error occurred on closed, %v\n", err)
 	}
-	if c.LocalAddr().Network() != "udp" {
-		require.Equal(s.tester, c.Context(), c, "invalid context")
-	}
+
+	require.Equal(s.tester, c.Context(), c, "invalid context")
 
 	atomic.AddInt32(&s.disconnected, 1)
 	return
@@ -642,7 +643,7 @@ func runServer(t *testing.T, addrs []string, et, reuseport, multicore, async, wr
 			WithReusePort(reuseport),
 			WithTicker(true),
 			WithTCPKeepAlive(time.Minute),
-			WithTCPNoDelay(TCPDelay),
+			WithTCPNoDelay(TCPNoDelay),
 			WithLoadBalancing(lb))
 	} else {
 		err = Run(ts,
@@ -660,7 +661,6 @@ func runServer(t *testing.T, addrs []string, et, reuseport, multicore, async, wr
 }
 
 func startClient(t *testing.T, network, addr string, multicore, async bool) {
-	rand.Seed(time.Now().UnixNano())
 	c, err := net.Dial(network, addr)
 	require.NoError(t, err)
 	defer c.Close()
@@ -678,7 +678,7 @@ func startClient(t *testing.T, network, addr string, multicore, async bool) {
 		if network == "udp" {
 			reqData = reqData[:datagramLen]
 		}
-		_, err = rand.Read(reqData)
+		_, err = crand.Read(reqData)
 		require.NoError(t, err)
 		_, err = c.Write(reqData)
 		require.NoError(t, err)
@@ -883,8 +883,19 @@ func (t *testShutdownServer) OnTick() (delay time.Duration, action Action) {
 }
 
 func testShutdown(t *testing.T, network, addr string) {
+	currentLogger, currentFlusher := logging.GetDefaultLogger(), logging.GetDefaultFlusher()
+	t.Cleanup(func() {
+		logging.SetDefaultLoggerAndFlusher(currentLogger, currentFlusher) // restore
+	})
+
 	events := &testShutdownServer{tester: t, network: network, addr: addr, N: 100}
-	err := Run(events, network+"://"+addr, WithTicker(true), WithReadBufferCap(512), WithWriteBufferCap(512))
+	logPath := filepath.Join(t.TempDir(), "gnet-test-shutdown.log")
+	err := Run(events, network+"://"+addr,
+		WithLogPath(logPath),
+		WithLogLevel(logging.WarnLevel),
+		WithTicker(true),
+		WithReadBufferCap(512),
+		WithWriteBufferCap(512))
 	assert.NoError(t, err)
 	require.Equal(t, 0, int(events.clients), "did not close all clients")
 }
@@ -1195,7 +1206,13 @@ type testStopServer struct {
 	*BuiltinEventEngine
 	tester                   *testing.T
 	network, addr, protoAddr string
+	eng                      Engine
 	action                   bool
+}
+
+func (t *testStopServer) OnBoot(eng Engine) (action Action) {
+	t.eng = eng
+	return
 }
 
 func (t *testStopServer) OnClose(Conn, error) (action Action) {
@@ -1226,7 +1243,7 @@ func (t *testStopServer) OnTick() (delay time.Duration, action Action) {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
-				logging.Debugf("stop engine...", Stop(ctx, t.protoAddr))
+				logging.Debugf("stop engine...", t.eng.Stop(ctx))
 			}()
 
 			// waiting the engine shutdown.
@@ -1354,7 +1371,7 @@ type testClosedWakeUpServer struct {
 	clientClosed chan struct{}
 }
 
-func (s *testClosedWakeUpServer) OnBoot(_ Engine) (action Action) {
+func (s *testClosedWakeUpServer) OnBoot(eng Engine) (action Action) {
 	go func() {
 		c, err := net.Dial(s.network, s.addr)
 		require.NoError(s.tester, err)
@@ -1369,7 +1386,7 @@ func (s *testClosedWakeUpServer) OnBoot(_ Engine) (action Action) {
 		close(s.clientClosed)
 		<-s.serverClosed
 
-		logging.Debugf("stop engine...", Stop(context.TODO(), s.protoAddr))
+		logging.Debugf("stop engine...", eng.Stop(context.TODO()))
 	}()
 
 	return None
@@ -1642,7 +1659,6 @@ func runSimServer(t *testing.T, addr string, et bool, nclients, packetSize, pack
 }
 
 func runSimClient(t *testing.T, network, addr string, packetSize, batch int) {
-	rand.Seed(time.Now().UnixNano())
 	c, err := net.Dial(network, addr)
 	require.NoError(t, err)
 	defer c.Close()
@@ -1678,7 +1694,7 @@ func batchSendAndRecv(t *testing.T, c net.Conn, rd *bufio.Reader, packetSize, ba
 	)
 	for i := 0; i < batch; i++ {
 		req := make([]byte, packetSize)
-		_, err := rand.Read(req)
+		_, err := crand.Read(req)
 		require.NoError(t, err)
 		requests = append(requests, req)
 		packet, _ := codec.Encode(req)

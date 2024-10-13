@@ -227,23 +227,13 @@ loop:
 	return nil
 }
 
-func (el *eventloop) close(c *conn, err error) (rerr error) {
-	if addr := c.localAddr; addr != nil && strings.HasPrefix(c.localAddr.Network(), "udp") {
-		rerr = el.poller.Delete(c.fd)
-		if _, ok := el.listeners[c.fd]; !ok {
-			rerr = unix.Close(c.fd)
-			el.connections.delConn(c)
-		}
-		if el.eventHandler.OnClose(c, err) == Shutdown {
-			return errorx.ErrEngineShutdown
-		}
-		c.release()
-		return
+func (el *eventloop) close(c *conn, err error) error {
+	if !c.opened || el.connections.getConn(c.fd) == nil {
+		return nil // ignore stale connections
 	}
 
-	if !c.opened || el.connections.getConn(c.fd) == nil {
-		return // ignore stale connections
-	}
+	el.connections.delConn(c)
+	action := el.eventHandler.OnClose(c, err)
 
 	// Send residual data in buffer back to the remote before actually closing the connection.
 	for !c.outboundBuffer.IsEmpty() {
@@ -258,26 +248,26 @@ func (el *eventloop) close(c *conn, err error) (rerr error) {
 		}
 	}
 
-	err0, err1 := el.poller.Delete(c.fd), unix.Close(c.fd)
-	if err0 != nil {
-		rerr = fmt.Errorf("failed to delete fd=%d from poller in event-loop(%d): %v", c.fd, el.idx, err0)
-	}
-	if err1 != nil {
-		err1 = fmt.Errorf("failed to close fd=%d in event-loop(%d): %v", c.fd, el.idx, os.NewSyscallError("close", err1))
-		if rerr != nil {
-			rerr = errors.New(rerr.Error() + " & " + err1.Error())
-		} else {
-			rerr = err1
-		}
-	}
-
-	el.connections.delConn(c)
-	if el.eventHandler.OnClose(c, err) == Shutdown {
-		rerr = errorx.ErrEngineShutdown
-	}
 	c.release()
 
-	return
+	var errStr strings.Builder
+	err0, err1 := el.poller.Delete(c.fd), unix.Close(c.fd)
+	if err0 != nil {
+		err0 = fmt.Errorf("failed to delete fd=%d from poller in event-loop(%d): %v",
+			c.fd, el.idx, os.NewSyscallError("delete", err0))
+		errStr.WriteString(err0.Error())
+		errStr.WriteString(" | ")
+	}
+	if err1 != nil {
+		err1 = fmt.Errorf("failed to close fd=%d in event-loop(%d): %v",
+			c.fd, el.idx, os.NewSyscallError("close", err1))
+		errStr.WriteString(err1.Error())
+	}
+	if errStr.Len() > 0 {
+		return errors.New(strings.TrimSuffix(errStr.String(), " | "))
+	}
+
+	return el.handleAction(c, action)
 }
 
 func (el *eventloop) wake(c *conn) error {
@@ -304,7 +294,7 @@ func (el *eventloop) ticker(ctx context.Context) {
 	for {
 		delay, action = el.eventHandler.OnTick()
 		switch action {
-		case None:
+		case None, Close:
 		case Shutdown:
 			// It seems reasonable to mark this as low-priority, waiting for some tasks like asynchronous writes
 			// to finish up before shutting down the service.
@@ -322,19 +312,6 @@ func (el *eventloop) ticker(ctx context.Context) {
 			return
 		case <-timer.C:
 		}
-	}
-}
-
-func (el *eventloop) handleAction(c *conn, action Action) error {
-	switch action {
-	case None:
-		return nil
-	case Close:
-		return el.close(c, nil)
-	case Shutdown:
-		return errorx.ErrEngineShutdown
-	default:
-		return nil
 	}
 }
 
@@ -362,6 +339,19 @@ func (el *eventloop) readUDP(fd int, _ netpoll.IOEvent, _ netpoll.IOFlags) error
 		return errorx.ErrEngineShutdown
 	}
 	return nil
+}
+
+func (el *eventloop) handleAction(c *conn, action Action) error {
+	switch action {
+	case None:
+		return nil
+	case Close:
+		return el.close(c, nil)
+	case Shutdown:
+		return errorx.ErrEngineShutdown
+	default:
+		return nil
+	}
 }
 
 /*
