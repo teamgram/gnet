@@ -13,7 +13,6 @@
 // limitations under the License.
 
 //go:build darwin || dragonfly || freebsd || linux || netbsd || openbsd
-// +build darwin dragonfly freebsd linux netbsd openbsd
 
 package gnet
 
@@ -26,16 +25,15 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/panjf2000/gnet/v2/internal/bs"
 	"github.com/panjf2000/gnet/v2/internal/gfd"
-	gio "github.com/panjf2000/gnet/v2/internal/io"
-	"github.com/panjf2000/gnet/v2/internal/netpoll"
-	"github.com/panjf2000/gnet/v2/internal/queue"
-	"github.com/panjf2000/gnet/v2/internal/socket"
+	"github.com/panjf2000/gnet/v2/pkg/bs"
 	"github.com/panjf2000/gnet/v2/pkg/buffer/elastic"
 	errorx "github.com/panjf2000/gnet/v2/pkg/errors"
-	"github.com/panjf2000/gnet/v2/pkg/logging"
+	gio "github.com/panjf2000/gnet/v2/pkg/io"
+	"github.com/panjf2000/gnet/v2/pkg/netpoll"
 	bsPool "github.com/panjf2000/gnet/v2/pkg/pool/byteslice"
+	"github.com/panjf2000/gnet/v2/pkg/queue"
+	"github.com/panjf2000/gnet/v2/pkg/socket"
 )
 
 type conn struct {
@@ -43,6 +41,7 @@ type conn struct {
 	gfd            gfd.GFD                // gnet file descriptor
 	ctx            any                    // user-defined context
 	remote         unix.Sockaddr          // remote socket address
+	proto          string                 // protocol name: "tcp", "udp", or "unix".
 	localAddr      net.Addr               // local addr
 	remoteAddr     net.Addr               // remote addr
 	loop           *eventloop             // connected event-loop
@@ -59,9 +58,10 @@ type conn struct {
 	debugString    string
 }
 
-func newTCPConn(fd int, el *eventloop, sa unix.Sockaddr, localAddr, remoteAddr net.Addr) (c *conn) {
+func newStreamConn(proto string, fd int, el *eventloop, sa unix.Sockaddr, localAddr, remoteAddr net.Addr) (c *conn) {
 	c = &conn{
 		fd:             fd,
+		proto:          proto,
 		remote:         sa,
 		loop:           el,
 		localAddr:      localAddr,
@@ -79,6 +79,7 @@ func newTCPConn(fd int, el *eventloop, sa unix.Sockaddr, localAddr, remoteAddr n
 func newUDPConn(fd int, el *eventloop, localAddr net.Addr, sa unix.Sockaddr, connected bool) (c *conn) {
 	c = &conn{
 		fd:             fd,
+		proto:          "udp",
 		gfd:            gfd.NewGFD(fd, el.idx, 0, 0),
 		remote:         sa,
 		loop:           el,
@@ -169,11 +170,7 @@ loop:
 			}
 			return
 		}
-		if err := c.loop.close(c, os.NewSyscallError("write", err)); err != nil {
-			logging.Errorf("failed to close connection(fd=%d,remote=%+v) on conn.write: %v",
-				c.fd, c.remoteAddr, err)
-		}
-		return 0, os.NewSyscallError("write", err)
+		return 0, c.loop.close(c, os.NewSyscallError("write", err))
 	}
 	data = data[sent:]
 	if isET && len(data) > 0 {
@@ -217,11 +214,7 @@ loop:
 			}
 			return
 		}
-		if err := c.loop.close(c, os.NewSyscallError("writev", err)); err != nil {
-			logging.Errorf("failed to close connection(fd=%d,remote=%+v) on conn.writev: %v",
-				c.fd, c.remoteAddr, err)
-		}
-		return 0, os.NewSyscallError("writev", err)
+		return 0, c.loop.close(c, os.NewSyscallError("writev", err))
 	}
 	pos := len(bs)
 	if remaining -= sent; remaining > 0 {
@@ -291,11 +284,20 @@ func (c *conn) asyncWritev(a any) (err error) {
 	return
 }
 
-func (c *conn) sendTo(buf []byte) error {
-	if c.remote == nil {
-		return unix.Send(c.fd, buf, 0)
+func (c *conn) sendTo(buf []byte, addr unix.Sockaddr) (n int, err error) {
+	defer func() {
+		if err != nil {
+			n = 0
+		}
+	}()
+
+	if addr != nil {
+		return len(buf), unix.Sendto(c.fd, buf, 0, addr)
 	}
-	return unix.Sendto(c.fd, buf, 0, c.remote)
+	if c.remote == nil { // connected UDP socket of client
+		return len(buf), unix.Send(c.fd, buf, 0)
+	}
+	return len(buf), unix.Sendto(c.fd, buf, 0, c.remote) // unconnected UDP socket of server
 }
 
 func (c *conn) resetBuffer() {
@@ -400,12 +402,22 @@ func (c *conn) Discard(n int) (int, error) {
 
 func (c *conn) Write(p []byte) (int, error) {
 	if c.isDatagram {
-		if err := c.sendTo(p); err != nil {
-			return 0, err
-		}
-		return len(p), nil
+		return c.sendTo(p, nil)
 	}
 	return c.write(p)
+}
+
+func (c *conn) SendTo(p []byte, addr net.Addr) (int, error) {
+	if !c.isDatagram {
+		return 0, errorx.ErrUnsupportedOp
+	}
+
+	sa := socket.NetAddrToSockaddr(addr)
+	if sa == nil {
+		return 0, errorx.ErrInvalidNetworkAddress
+	}
+
+	return c.sendTo(p, sa)
 }
 
 func (c *conn) Writev(bs [][]byte) (int, error) {
@@ -468,12 +480,22 @@ func (c *conn) SetNoDelay(noDelay bool) error {
 }
 
 func (c *conn) SetKeepAlivePeriod(d time.Duration) error {
+	if c.proto != "tcp" {
+		return errorx.ErrUnsupportedOp
+	}
 	return socket.SetKeepAlivePeriod(c.fd, int(d.Seconds()))
+}
+
+func (c *conn) SetKeepAlive(enabled bool, idle, intvl time.Duration, cnt int) error {
+	if c.proto != "tcp" {
+		return errorx.ErrUnsupportedOp
+	}
+	return socket.SetKeepAlive(c.fd, enabled, int(idle.Seconds()), int(intvl.Seconds()), cnt)
 }
 
 func (c *conn) AsyncWrite(buf []byte, callback AsyncCallback) error {
 	if c.isDatagram {
-		err := c.sendTo(buf)
+		_, err := c.sendTo(buf, nil)
 		// TODO: it will not go asynchronously with UDP, so calling a callback is needless,
 		//  we may remove this branch in the future, please don't rely on the callback
 		// 	to do something important under UDP, if you're working with UDP, just call Conn.Write
@@ -518,6 +540,10 @@ func (c *conn) Close() error {
 		err = c.loop.close(c, nil)
 		return
 	}, nil)
+}
+
+func (c *conn) EventLoop() EventLoop {
+	return c.loop
 }
 
 func (*conn) SetDeadline(_ time.Time) error {

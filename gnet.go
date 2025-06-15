@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package gnet implements a high-performance, lightweight, non-blocking,
+// event-driven networking framework written in pure Go.
+//
+// Visit https://gnet.host/ for more details about gnet.
 package gnet
 
 import (
@@ -23,10 +27,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/panjf2000/gnet/v2/internal/math"
+	"github.com/panjf2000/gnet/v2/internal/gfd"
 	"github.com/panjf2000/gnet/v2/pkg/buffer/ring"
-	"github.com/panjf2000/gnet/v2/pkg/errors"
+	errorx "github.com/panjf2000/gnet/v2/pkg/errors"
 	"github.com/panjf2000/gnet/v2/pkg/logging"
+	"github.com/panjf2000/gnet/v2/pkg/math"
 )
 
 // Action is an action that occurs after the completion of an event.
@@ -52,10 +57,10 @@ type Engine struct {
 // Validate checks whether the engine is available.
 func (e Engine) Validate() error {
 	if e.eng == nil || len(e.eng.listeners) == 0 {
-		return errors.ErrEmptyEngine
+		return errorx.ErrEmptyEngine
 	}
-	if e.eng.isInShutdown() {
-		return errors.ErrEngineInShutdown
+	if e.eng.isShutdown() {
+		return errorx.ErrEngineInShutdown
 	}
 	return nil
 }
@@ -73,20 +78,72 @@ func (e Engine) CountConnections() (count int) {
 	return
 }
 
+// Register registers the new connection to the event-loop that is chosen
+// based off of the algorithm set by WithLoadBalancing.
+// You should call either of the NewNetConnContext or NewNetAddrContext
+// and pass the returned context to this method. net.Conn will precede
+// net.Addr if both are present in the context.
+//
+// Note that you need to switch to another load-balancing algorithm over
+// the default RoundRobin when starting the engine, to avoid data race
+// issue if you plan on calling this method from somewhere later on.
+func (e Engine) Register(ctx context.Context) (<-chan RegisteredResult, error) {
+	if err := e.Validate(); err != nil {
+		return nil, err
+	}
+
+	if e.eng.eventLoops.len() == 0 {
+		return nil, errorx.ErrEmptyEngine
+	}
+
+	c, ok := FromNetConnContext(ctx)
+	if ok {
+		return e.eng.eventLoops.next(c.RemoteAddr()).Enroll(ctx, c)
+	}
+
+	addr, ok := FromNetAddrContext(ctx)
+	if ok {
+		return e.eng.eventLoops.next(addr).Register(ctx, addr)
+	}
+
+	return nil, errorx.ErrInvalidNetworkAddress
+}
+
 // Dup returns a copy of the underlying file descriptor of listener.
 // It is the caller's responsibility to close dupFD when finished.
 // Closing listener does not affect dupFD, and closing dupFD does not affect listener.
+//
+// Note that this method is only available when the engine has only one listener.
 func (e Engine) Dup() (fd int, err error) {
 	if err := e.Validate(); err != nil {
 		return -1, err
 	}
+
 	if len(e.eng.listeners) > 1 {
-		return -1, errors.ErrUnsupportedOp
+		return -1, errorx.ErrUnsupportedOp
 	}
+
 	for _, ln := range e.eng.listeners {
 		fd, err = ln.dup()
 	}
+
 	return
+}
+
+// DupListener is like Dup, but it duplicates the listener with the given network and address.
+// This is useful when there are multiple listeners.
+func (e Engine) DupListener(network, addr string) (int, error) {
+	if err := e.Validate(); err != nil {
+		return -1, err
+	}
+
+	for _, ln := range e.eng.listeners {
+		if ln.network == network && ln.address == addr {
+			return ln.dup()
+		}
+	}
+
+	return -1, errorx.ErrInvalidNetworkAddress
 }
 
 // Stop gracefully shuts down this Engine without interrupting any active event-loops,
@@ -101,7 +158,7 @@ func (e Engine) Stop(ctx context.Context) error {
 	ticker := time.NewTicker(shutdownPollInterval)
 	defer ticker.Stop()
 	for {
-		if e.eng.isInShutdown() {
+		if e.eng.isShutdown() {
 			return nil
 		}
 		select {
@@ -177,7 +234,7 @@ type Reader interface {
 	// Next returns a slice containing the next n bytes from the buffer,
 	// advancing the buffer as if the bytes had been returned by Read.
 	// Calling this method has the same effect as calling Peek and Discard.
-	// If the amount of the available bytes is less than requested, a pair of (0, io.ErrShortBuffer)
+	// If the number of the available bytes is less than requested, a pair of (0, io.ErrShortBuffer)
 	// is returned.
 	//
 	// Note that the []byte buf returned by Next() is not allowed to be passed to a new goroutine,
@@ -187,7 +244,7 @@ type Reader interface {
 	Next(n int) (buf []byte, err error)
 
 	// Peek returns the next n bytes without advancing the inbound buffer, the returned bytes
-	// remain valid until a Discard is called. If the amount of the available bytes is
+	// remain valid until a Discard is called. If the number of the available bytes is
 	// less than requested, a pair of (0, io.ErrShortBuffer) is returned.
 	//
 	// Note that the []byte buf returned by Peek() is not allowed to be passed to a new goroutine,
@@ -200,7 +257,7 @@ type Reader interface {
 	Discard(n int) (discarded int, err error)
 
 	// InboundBuffered returns the number of bytes that can be read from the current buffer.
-	InboundBuffered() (n int)
+	InboundBuffered() int
 }
 
 // Writer is an interface that consists of a number of methods for writing that Conn must implement.
@@ -208,17 +265,24 @@ type Writer interface {
 	io.Writer     // not concurrency-safe
 	io.ReaderFrom // not concurrency-safe
 
+	// SendTo transmits a message to the given address, it's not concurrency-safe.
+	// It is available only for UDP sockets, an ErrUnsupportedOp will be returned
+	// when it is called on a non-UDP socket.
+	// This method should be used only when you need to send a message to a specific
+	// address over the UDP socket, otherwise you should use Conn.Write() instead.
+	SendTo(buf []byte, addr net.Addr) (n int, err error)
+
 	// Writev writes multiple byte slices to remote synchronously, it's not concurrency-safe,
 	// you must invoke it within any method in EventHandler.
 	Writev(bs [][]byte) (n int, err error)
 
 	// Flush writes any buffered data to the underlying connection, it's not concurrency-safe,
 	// you must invoke it within any method in EventHandler.
-	Flush() (err error)
+	Flush() error
 
 	// OutboundBuffered returns the number of bytes that can be read from the current buffer.
 	// it's not concurrency-safe, you must invoke it within any method in EventHandler.
-	OutboundBuffered() (n int)
+	OutboundBuffered() int
 
 	// AsyncWrite writes bytes to remote asynchronously, it's concurrency-safe,
 	// you don't have to invoke it within any method in EventHandler,
@@ -261,41 +325,103 @@ type Socket interface {
 	// Closing c does not affect fd, and closing fd does not affect c.
 	//
 	// The returned file descriptor is different from the
-	// connection's. Attempting to change properties of the original
+	//  connection. Attempting to change the properties of the original
 	// using this duplicate may or may not have the desired effect.
 	Dup() (int, error)
 
 	// SetReadBuffer sets the size of the operating system's
 	// receive buffer associated with the connection.
-	SetReadBuffer(bytes int) error
+	SetReadBuffer(size int) error
 
 	// SetWriteBuffer sets the size of the operating system's
 	// transmit buffer associated with the connection.
-	SetWriteBuffer(bytes int) error
+	SetWriteBuffer(size int) error
 
 	// SetLinger sets the behavior of Close on a connection which still
 	// has data waiting to be sent or to be acknowledged.
 	//
-	// If sec < 0 (the default), the operating system finishes sending the
+	// If secs < 0 (the default), the operating system finishes sending the
 	// data in the background.
 	//
-	// If sec == 0, the operating system discards any unsent or
+	// If secs == 0, the operating system discards any unsent or
 	// unacknowledged data.
 	//
-	// If sec > 0, the data is sent in the background as with sec < 0. On
+	// If secs > 0, the data is sent in the background as with sec < 0. On
 	// some operating systems after sec seconds have elapsed any remaining
 	// unsent data may be discarded.
-	SetLinger(sec int) error
+	SetLinger(secs int) error
 
-	// SetKeepAlivePeriod tells operating system to send keep-alive messages on the connection
-	// and sets period between TCP keep-alive probes.
+	// SetKeepAlivePeriod tells the operating system to send keep-alive
+	// messages on the connection and sets period between TCP keep-alive probes.
 	SetKeepAlivePeriod(d time.Duration) error
+
+	// SetKeepAlive enables/disables the TCP keepalive with all socket options:
+	// TCP_KEEPIDLE, TCP_KEEPINTVL and TCP_KEEPCNT. idle is the value for TCP_KEEPIDLE,
+	// intvl is the value for TCP_KEEPINTVL, cnt is the value for TCP_KEEPCNT,
+	// ignored when enabled is false.
+	//
+	// With TCP keep-alive enabled, idle is the time (in seconds) the connection
+	// needs to remain idle before TCP starts sending keep-alive probes,
+	// intvl is the time (in seconds) between individual keep-alive probes.
+	// TCP will drop the connection after sending cnt probes without getting
+	// any replies from the peer; then the socket is destroyed, and OnClose
+	// is triggered.
+	//
+	// If one of idle, intvl, or cnt is less than 1, an error is returned.
+	SetKeepAlive(enabled bool, idle, intvl time.Duration, cnt int) error
 
 	// SetNoDelay controls whether the operating system should delay
 	// packet transmission in hopes of sending fewer packets (Nagle's
 	// algorithm).
 	// The default is true (no delay), meaning that data is sent as soon as possible after a Write.
 	SetNoDelay(noDelay bool) error
+}
+
+// Runnable defines the common protocol of an execution on an event-loop.
+// This interface should be implemented and passed to an event-loop in some way,
+// then the event-loop will invoke Run to perform the execution.
+// !!!Caution: Run must not contain any blocking operations like heavy disk or
+// network I/O, or else it will block the event-loop.
+type Runnable interface {
+	// Run is about to be executed by the event-loop.
+	Run(ctx context.Context) error
+}
+
+// RunnableFunc is an adapter to allow the use of ordinary function as a Runnable.
+type RunnableFunc func(ctx context.Context) error
+
+// Run executes the RunnableFunc itself.
+func (fn RunnableFunc) Run(ctx context.Context) error {
+	return fn(ctx)
+}
+
+// RegisteredResult is the result of a Register call.
+type RegisteredResult struct {
+	Conn Conn
+	Err  error
+}
+
+// EventLoop provides a set of methods for manipulating the event-loop.
+type EventLoop interface {
+	// Register connects to the given address and registers the connection to the current event-loop,
+	// it's concurrency-safe.
+	Register(ctx context.Context, addr net.Addr) (<-chan RegisteredResult, error)
+	// Enroll is like Register, but it accepts an established net.Conn instead of a net.Addr,
+	// it's concurrency-safe.
+	Enroll(ctx context.Context, c net.Conn) (<-chan RegisteredResult, error)
+	// Execute will execute the given runnable on the event-loop at some time in the future,
+	// it's concurrency-safe.
+	Execute(ctx context.Context, runnable Runnable) error
+	// Schedule is like Execute, but it allows you to specify when the runnable is executed.
+	// In other words, the runnable will be executed when the delay duration is reached,
+	// it's concurrency-safe.
+	// TODO(panjf2000): not supported yet, implement this.
+	Schedule(ctx context.Context, runnable Runnable, delay time.Duration) error
+
+	// Close closes the given Conn that belongs to the current event-loop.
+	// It must be called on the same event-loop that the connection belongs to.
+	// This method is not concurrency-safe, you must invoke it on the event loop.
+	Close(Conn) error
 }
 
 // Conn is an interface of underlying connection.
@@ -308,37 +434,41 @@ type Conn interface {
 	// you must invoke it within any method in EventHandler.
 	Context() (ctx any)
 
+	// EventLoop returns the event-loop that the connection belongs to.
+	// The returned EventLoop is concurrency-safe.
+	EventLoop() EventLoop
+
 	// SetContext sets a user-defined context, it's not concurrency-safe,
 	// you must invoke it within any method in EventHandler.
 	SetContext(ctx any)
 
 	// LocalAddr is the connection's local socket address, it's not concurrency-safe,
 	// you must invoke it within any method in EventHandler.
-	LocalAddr() (addr net.Addr)
+	LocalAddr() net.Addr
 
 	// RemoteAddr is the connection's remote address, it's not concurrency-safe,
 	// you must invoke it within any method in EventHandler.
-	RemoteAddr() (addr net.Addr)
+	RemoteAddr() net.Addr
 
-	// Wake triggers a OnTraffic event for the current connection, it's concurrency-safe.
-	Wake(callback AsyncCallback) (err error)
+	// Wake triggers an OnTraffic event for the current connection, it's concurrency-safe.
+	Wake(callback AsyncCallback) error
 
 	// CloseWithCallback closes the current connection, it's concurrency-safe.
 	// Usually you should provide a non-nil callback for this method,
 	// otherwise your better choice is Close().
-	CloseWithCallback(callback AsyncCallback) (err error)
+	CloseWithCallback(callback AsyncCallback) error
 
 	// Close closes the current connection, implements net.Conn, it's concurrency-safe.
-	Close() (err error)
+	Close() error
 
 	// SetDeadline implements net.Conn.
-	SetDeadline(t time.Time) (err error)
+	SetDeadline(time.Time) error
 
 	// SetReadDeadline implements net.Conn.
-	SetReadDeadline(t time.Time) (err error)
+	SetReadDeadline(time.Time) error
 
 	// SetWriteDeadline implements net.Conn.
-	SetWriteDeadline(t time.Time) (err error)
+	SetWriteDeadline(time.Time) error
 
 	// ConnId returns the connection Id, t's concurrency-safe.
 	ConnId() int64
@@ -444,11 +574,11 @@ func createListeners(addrs []string, opts ...Option) ([]*listener, *Options, err
 	logging.Debugf("default logging level is %s", logging.LogLevel())
 
 	// The maximum number of operating system threads that the Go program can use is initially set to 10000,
-	// which should also be the maximum amount of I/O event-loops locked to OS threads that users can start up.
+	// which should also be the maximum number of I/O event-loops locked to OS threads that users can start up.
 	if options.LockOSThread && options.NumEventLoop > 10000 {
 		logging.Errorf("too many event-loops under LockOSThread mode, should be less than 10,000 "+
 			"while you are trying to set up %d\n", options.NumEventLoop)
-		return nil, nil, errors.ErrTooManyEventLoopThreads
+		return nil, nil, errorx.ErrTooManyEventLoopThreads
 	}
 
 	if options.EdgeTriggeredIOChunk > 0 {
@@ -500,15 +630,22 @@ func createListeners(addrs []string, opts ...Option) ([]*listener, *Options, err
 	// Note that FreeBSD 12 introduced a new socket option named SO_REUSEPORT_LB
 	// with the capability of load balancing, it's the equivalent of Linux's SO_REUSEPORT.
 	// Also note that DragonFlyBSD 3.6.0 extended SO_REUSEPORT to distribute workload to
-	// available sockets, which make it the same as Linux's SO_REUSEPORT.
-	//
+	// available sockets, which makes it the same as Linux's SO_REUSEPORT.
+	goos := runtime.GOOS
+	if options.ReusePort &&
+		(options.Multicore || options.NumEventLoop > 1) &&
+		(goos != "linux" && goos != "dragonfly" && goos != "freebsd") {
+		options.ReusePort = false
+	}
+
 	// Despite the fact that SO_REUSEPORT can be set on a Unix domain socket
 	// via setsockopt() without reporting an error, SO_REUSEPORT is actually
 	// not supported for sockets of AF_UNIX. Thus, we avoid setting it on the
 	// Unix domain sockets.
-	goos := runtime.GOOS
-	if (options.Multicore || options.NumEventLoop > 1) && options.ReusePort &&
-		((goos != "linux" && goos != "dragonfly" && goos != "freebsd") || hasUnix) {
+	// As of this commit https://git.kernel.org/pub/scm/linux/kernel/git/netdev/net.git/commit/?id=5b0af621c3f6,
+	// EOPNOTSUPP will be returned when trying to set SO_REUSEPORT on an AF_UNIX socket on Linux. We therefore
+	// avoid setting it on Unix domain sockets on all UNIX-like platforms to keep this behavior consistent.
+	if options.ReusePort && hasUnix {
 		options.ReusePort = false
 	}
 
@@ -601,17 +738,17 @@ func Stop(ctx context.Context, protoAddr string) error {
 		eng.shutdown(nil)
 		defer allEngines.Delete(protoAddr)
 	} else {
-		return errors.ErrEngineInShutdown
+		return errorx.ErrEngineInShutdown
 	}
 
-	if eng.isInShutdown() {
-		return errors.ErrEngineInShutdown
+	if eng.isShutdown() {
+		return errorx.ErrEngineInShutdown
 	}
 
 	ticker := time.NewTicker(shutdownPollInterval)
 	defer ticker.Stop()
 	for {
-		if eng.isInShutdown() {
+		if eng.isShutdown() {
 			return nil
 		}
 		select {
@@ -625,17 +762,31 @@ func Stop(ctx context.Context, protoAddr string) error {
 func parseProtoAddr(protoAddr string) (string, string, error) {
 	protoAddr = strings.ToLower(protoAddr)
 	if strings.Count(protoAddr, "://") != 1 {
-		return "", "", errors.ErrInvalidNetworkAddress
+		return "", "", errorx.ErrInvalidNetworkAddress
 	}
 	pair := strings.SplitN(protoAddr, "://", 2)
 	proto, addr := pair[0], pair[1]
 	switch proto {
 	case "tcp", "tcp4", "tcp6", "udp", "udp4", "udp6", "unix":
 	default:
-		return "", "", errors.ErrUnsupportedProtocol
+		return "", "", errorx.ErrUnsupportedProtocol
 	}
 	if addr == "" {
-		return "", "", errors.ErrInvalidNetworkAddress
+		return "", "", errorx.ErrInvalidNetworkAddress
 	}
 	return proto, addr, nil
+}
+
+func determineEventLoops(opts *Options) int {
+	numEventLoop := 1
+	if opts.Multicore {
+		numEventLoop = runtime.NumCPU()
+	}
+	if opts.NumEventLoop > 0 {
+		numEventLoop = opts.NumEventLoop
+	}
+	if numEventLoop > gfd.EventLoopIndexMax {
+		numEventLoop = gfd.EventLoopIndexMax
+	}
+	return numEventLoop
 }

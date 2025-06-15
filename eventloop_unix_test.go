@@ -1,5 +1,4 @@
 //go:build darwin || dragonfly || freebsd || linux || netbsd || openbsd
-// +build darwin dragonfly freebsd linux netbsd openbsd
 
 package gnet
 
@@ -15,6 +14,8 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/stretchr/testify/assert"
+
+	goPool "github.com/panjf2000/gnet/v2/pkg/pool/goroutine"
 )
 
 func (lb *roundRobinLoadBalancer) register(el *eventloop) {
@@ -34,7 +35,7 @@ func (lb *sourceAddrHashLoadBalancer) register(el *eventloop) {
 
 func registerInitConn(el *eventloop) {
 	for i := 0; i < int(atomic.LoadInt32(&nowEventLoopInitConn)); i++ {
-		c := newTCPConn(i, el, &unix.SockaddrInet4{}, &net.TCPAddr{}, &net.TCPAddr{})
+		c := newStreamConn("tcp", i, el, &unix.SockaddrInet4{}, &net.TCPAddr{}, &net.TCPAddr{})
 		el.connections.addConn(c, el.idx)
 	}
 }
@@ -99,16 +100,16 @@ func benchServeGC(b *testing.B, network, addr string, async bool, elNum int, ini
 	}
 
 	nowEventLoopInitConn = initConnCount
-	go func() {
+	_ = goPool.DefaultWorkerPool.Submit(func() {
 		err := Run(ts,
 			network+"://"+addr,
 			WithLockOSThread(async),
 			WithNumEventLoop(elNum),
-			WithTCPKeepAlive(time.Minute*1),
+			WithTCPKeepAlive(time.Minute),
 			WithTCPNoDelay(TCPDelay))
 		assert.NoError(b, err)
 		nowEventLoopInitConn = 0
-	}()
+	})
 	<-ts.initOk
 	return ts
 }
@@ -127,15 +128,12 @@ type benchmarkServerGC struct {
 
 func (s *benchmarkServerGC) OnBoot(eng Engine) (action Action) {
 	s.eng = eng
-	go func() {
-		for {
-			if s.eng.eng.eventLoops.len() == s.elNum && s.eng.CountConnections() == s.elNum*int(s.initConnCount) {
-				break
-			}
+	_ = goPool.DefaultWorkerPool.Submit(func() {
+		for s.eng.eng.eventLoops.len() != s.elNum || s.eng.CountConnections() != s.elNum*int(s.initConnCount) {
 			time.Sleep(time.Millisecond)
 		}
 		close(s.initOk)
-	}()
+	})
 	return
 }
 
@@ -234,7 +232,7 @@ func testServeGC(t *testing.T, network, addr string, multicore, async bool, elNu
 		WithLockOSThread(async),
 		WithMulticore(multicore),
 		WithNumEventLoop(elNum),
-		WithTCPKeepAlive(time.Minute*1),
+		WithTCPKeepAlive(time.Minute),
 		WithTCPNoDelay(TCPDelay))
 	assert.NoError(t, err)
 	nowEventLoopInitConn = 0
@@ -257,7 +255,10 @@ func (s *testServerGC) OnBoot(eng Engine) (action Action) {
 	if testBigGC {
 		gcSecs = 10
 	}
-	go s.GC(gcSecs)
+	err := goPool.DefaultWorkerPool.Submit(func() {
+		s.GC(gcSecs)
+	})
+	assert.NoError(s.tester, err)
 
 	return
 }

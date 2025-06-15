@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package goroutine is a wrapper of github.com/panjf2000/ants with some practical configurations.
 package goroutine
 
 import (
@@ -39,6 +40,9 @@ func init() {
 	ants.Release()
 }
 
+// DefaultWorkerPool is the global worker pool.
+var DefaultWorkerPool = Default()
+
 // Pool is the alias of ants.Pool.
 type Pool = ants.Pool
 
@@ -51,7 +55,7 @@ func (l antsLogger) Printf(format string, args ...any) {
 	l.Infof(format, args...)
 }
 
-// Default instantiates a non-blocking *WorkerPool with the capacity of DefaultAntsPoolSize.
+// Default instantiates a non-blocking goroutine pool with the capacity of DefaultAntsPoolSize.
 func Default() *Pool {
 	options := ants.Options{
 		ExpiryDuration: ExpiryDuration,

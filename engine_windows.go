@@ -17,9 +17,7 @@ package gnet
 import (
 	"context"
 	"errors"
-	"runtime"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"golang.org/x/sync/errgroup"
@@ -29,27 +27,22 @@ import (
 )
 
 type engine struct {
-	listeners  []*listener
-	opts       *Options     // options with engine
-	eventLoops loadBalancer // event-loops for handling events
-	ticker     struct {
-		ctx    context.Context
-		cancel context.CancelFunc
-	}
-	inShutdown    int32 // whether the engine is in shutdown
-	beingShutdown int32 // whether the engine is being shutdown
-	workerPool    struct {
+	listeners     []*listener
+	opts          *Options     // options with engine
+	eventLoops    loadBalancer // event-loops for handling events
+	inShutdown    atomic.Bool  // whether the engine is in shutdown
+	beingShutdown atomic.Bool  // whether the engine is being shutdown
+	turnOff       context.CancelFunc
+	eventHandler  EventHandler // user eventHandler
+	concurrency   struct {
 		*errgroup.Group
 
-		shutdownCtx context.Context
-		shutdown    context.CancelFunc
-		once        sync.Once
+		ctx context.Context
 	}
-	eventHandler EventHandler // user eventHandler
 }
 
-func (eng *engine) isInShutdown() bool {
-	return atomic.LoadInt32(&eng.inShutdown) == 1
+func (eng *engine) isShutdown() bool {
+	return eng.inShutdown.Load()
 }
 
 // shutdown signals the engine to shut down.
@@ -57,8 +50,8 @@ func (eng *engine) shutdown(err error) {
 	if err != nil && !errors.Is(err, errorx.ErrEngineShutdown) {
 		eng.opts.Logger.Errorf("engine is being shutdown with error: %v", err)
 	}
-	eng.workerPool.shutdown()
-	atomic.StoreInt32(&eng.beingShutdown, 1)
+	eng.turnOff()
+	eng.beingShutdown.Store(true)
 }
 
 func (eng *engine) closeEventLoops() {
@@ -71,33 +64,37 @@ func (eng *engine) closeEventLoops() {
 	}
 }
 
-func (eng *engine) start(numEventLoop int) error {
+func (eng *engine) start(ctx context.Context, numEventLoop int) error {
+	var el0 *eventloop
 	for i := 0; i < numEventLoop; i++ {
 		el := eventloop{
 			ch:           make(chan any, 1024),
-			idx:          i,
 			eng:          eng,
 			connections:  make(map[*conn]struct{}),
 			eventHandler: eng.eventHandler,
 		}
 		eng.eventLoops.register(&el)
-		eng.workerPool.Go(el.run)
+		eng.concurrency.Go(el.run)
 		if i == 0 && eng.opts.Ticker {
-			eng.workerPool.Go(func() error {
-				el.ticker(eng.ticker.ctx)
-				return nil
-			})
+			el0 = &el
 		}
+	}
+
+	if el0 != nil {
+		eng.concurrency.Go(func() error {
+			el0.ticker(ctx)
+			return nil
+		})
 	}
 
 	for _, ln := range eng.listeners {
 		l := ln
 		if l.pc != nil {
-			eng.workerPool.Go(func() error {
+			eng.concurrency.Go(func() error {
 				return eng.ListenUDP(l.pc)
 			})
 		} else {
-			eng.workerPool.Go(func() error {
+			eng.concurrency.Go(func() error {
 				return eng.listenStream(l.ln)
 			})
 		}
@@ -106,50 +103,36 @@ func (eng *engine) start(numEventLoop int) error {
 	return nil
 }
 
-func (eng *engine) stop(engine Engine) error {
-	<-eng.workerPool.shutdownCtx.Done()
+func (eng *engine) stop(ctx context.Context, engine Engine) {
+	<-ctx.Done()
 
 	eng.eventHandler.OnShutdown(engine)
 
-	if eng.ticker.cancel != nil {
-		eng.ticker.cancel()
-	}
-
 	eng.closeEventLoops()
 
-	if err := eng.workerPool.Wait(); err != nil && !errors.Is(err, errorx.ErrEngineShutdown) {
+	if err := eng.concurrency.Wait(); err != nil && !errors.Is(err, errorx.ErrEngineShutdown) {
 		eng.opts.Logger.Errorf("engine shutdown error: %v", err)
 	}
 
-	atomic.StoreInt32(&eng.inShutdown, 1)
-
-	return nil
+	eng.inShutdown.Store(true)
 }
 
 func run(eventHandler EventHandler, listeners []*listener, options *Options, addrs []string) error {
-	// Figure out the proper number of event-loops/goroutines to run.
-	numEventLoop := 1
-	if options.Multicore {
-		numEventLoop = runtime.NumCPU()
-	}
-	if options.NumEventLoop > 0 {
-		numEventLoop = options.NumEventLoop
-	}
-
+	numEventLoop := determineEventLoops(options)
 	logging.Infof("Launching gnet with %d event-loops, listening on: %s",
 		numEventLoop, strings.Join(addrs, " | "))
 
-	shutdownCtx, shutdown := context.WithCancel(context.Background())
+	rootCtx, shutdown := context.WithCancel(context.Background())
+	eg, ctx := errgroup.WithContext(rootCtx)
 	eng := engine{
 		opts:         options,
-		eventHandler: eventHandler,
 		listeners:    listeners,
-		workerPool: struct {
+		turnOff:      shutdown,
+		eventHandler: eventHandler,
+		concurrency: struct {
 			*errgroup.Group
-			shutdownCtx context.Context
-			shutdown    context.CancelFunc
-			once        sync.Once
-		}{&errgroup.Group{}, shutdownCtx, shutdown, sync.Once{}},
+			ctx context.Context
+		}{eg, ctx},
 	}
 
 	switch options.LB {
@@ -166,22 +149,18 @@ func run(eventHandler EventHandler, listeners []*listener, options *Options, add
 		eng.eventLoops = new(sourceAddrHashLoadBalancer)
 	}
 
-	if options.Ticker {
-		eng.ticker.ctx, eng.ticker.cancel = context.WithCancel(context.Background())
-	}
-
 	engine := Engine{eng: &eng}
 	switch eventHandler.OnBoot(engine) {
-	case None:
+	case None, Close:
 	case Shutdown:
 		return nil
 	}
 
-	if err := eng.start(numEventLoop); err != nil {
+	if err := eng.start(ctx, numEventLoop); err != nil {
 		eng.opts.Logger.Errorf("gnet engine is stopping with error: %v", err)
 		return err
 	}
-	defer eng.stop(engine) //nolint:errcheck
+	defer eng.stop(rootCtx, engine)
 
 	for _, addr := range addrs {
 		allEngines.Store(addr, &eng)

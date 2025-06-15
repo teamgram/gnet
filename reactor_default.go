@@ -13,8 +13,6 @@
 // limitations under the License.
 
 //go:build (darwin || dragonfly || freebsd || linux || netbsd || openbsd) && !poll_opt
-// +build darwin dragonfly freebsd linux netbsd openbsd
-// +build !poll_opt
 
 package gnet
 
@@ -22,8 +20,8 @@ import (
 	"errors"
 	"runtime"
 
-	"github.com/panjf2000/gnet/v2/internal/netpoll"
 	errorx "github.com/panjf2000/gnet/v2/pkg/errors"
+	"github.com/panjf2000/gnet/v2/pkg/netpoll"
 )
 
 func (el *eventloop) rotate() error {

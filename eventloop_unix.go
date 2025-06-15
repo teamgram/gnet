@@ -13,7 +13,6 @@
 // limitations under the License.
 
 //go:build darwin || dragonfly || freebsd || linux || netbsd || openbsd
-// +build darwin dragonfly freebsd linux netbsd openbsd
 
 package gnet
 
@@ -22,17 +21,22 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
 
-	gio "github.com/panjf2000/gnet/v2/internal/io"
-	"github.com/panjf2000/gnet/v2/internal/netpoll"
-	"github.com/panjf2000/gnet/v2/internal/queue"
 	errorx "github.com/panjf2000/gnet/v2/pkg/errors"
+	gio "github.com/panjf2000/gnet/v2/pkg/io"
 	"github.com/panjf2000/gnet/v2/pkg/logging"
+	"github.com/panjf2000/gnet/v2/pkg/netpoll"
+	"github.com/panjf2000/gnet/v2/pkg/pool/goroutine"
+	"github.com/panjf2000/gnet/v2/pkg/queue"
+	"github.com/panjf2000/gnet/v2/pkg/socket"
 )
 
 type eventloop struct {
@@ -44,6 +48,46 @@ type eventloop struct {
 	connections  connMatrix        // loop connections storage
 	eventHandler EventHandler      // user eventHandler
 	next         uint16
+}
+
+func (el *eventloop) Register(ctx context.Context, addr net.Addr) (<-chan RegisteredResult, error) {
+	if el.engine.isShutdown() {
+		return nil, errorx.ErrEngineInShutdown
+	}
+	if addr == nil {
+		return nil, errorx.ErrInvalidNetworkAddress
+	}
+	return el.enroll(nil, addr, FromContext(ctx))
+}
+
+func (el *eventloop) Enroll(ctx context.Context, c net.Conn) (<-chan RegisteredResult, error) {
+	if el.engine.isShutdown() {
+		return nil, errorx.ErrEngineInShutdown
+	}
+	if c == nil {
+		return nil, errorx.ErrInvalidNetConn
+	}
+	return el.enroll(c, c.RemoteAddr(), FromContext(ctx))
+}
+
+func (el *eventloop) Execute(ctx context.Context, runnable Runnable) error {
+	if el.engine.isShutdown() {
+		return errorx.ErrEngineInShutdown
+	}
+	if runnable == nil {
+		return errorx.ErrNilRunnable
+	}
+	return el.poller.Trigger(queue.LowPriority, func(any) error {
+		return runnable.Run(ctx)
+	}, nil)
+}
+
+func (el *eventloop) Schedule(context.Context, Runnable, time.Duration) error {
+	return errorx.ErrUnsupportedOp
+}
+
+func (el *eventloop) Close(c Conn) error {
+	return el.close(c.(*conn), nil)
 }
 
 func (el *eventloop) getLogger() logging.Logger {
@@ -65,6 +109,97 @@ func (el *eventloop) closeConns() {
 type connWithCallback struct {
 	c  *conn
 	cb func()
+}
+
+func (el *eventloop) enroll(c net.Conn, addr net.Addr, ctx any) (resCh chan RegisteredResult, err error) {
+	resCh = make(chan RegisteredResult, 1)
+	err = goroutine.DefaultWorkerPool.Submit(func() {
+		defer close(resCh)
+
+		var err error
+		if c == nil {
+			if c, err = net.Dial(addr.Network(), addr.String()); err != nil {
+				resCh <- RegisteredResult{Err: err}
+				return
+			}
+		}
+		defer c.Close() //nolint:errcheck
+
+		sc, ok := c.(syscall.Conn)
+		if !ok {
+			resCh <- RegisteredResult{
+				Err: fmt.Errorf("failed to assert syscall.Conn from net.Conn: %s", addr.String()),
+			}
+			return
+		}
+		rc, err := sc.SyscallConn()
+		if err != nil {
+			resCh <- RegisteredResult{Err: err}
+			return
+		}
+
+		var dupFD int
+		err1 := rc.Control(func(fd uintptr) {
+			dupFD, err = unix.Dup(int(fd))
+		})
+		if err != nil {
+			resCh <- RegisteredResult{Err: err}
+			return
+		}
+		if err1 != nil {
+			resCh <- RegisteredResult{Err: err1}
+			return
+		}
+
+		var (
+			sockAddr unix.Sockaddr
+			gc       *conn
+		)
+		switch c.(type) {
+		case *net.UnixConn:
+			sockAddr, _, _, err = socket.GetUnixSockAddr(c.RemoteAddr().Network(), c.RemoteAddr().String())
+			if err != nil {
+				resCh <- RegisteredResult{Err: err}
+				return
+			}
+			ua := c.LocalAddr().(*net.UnixAddr)
+			ua.Name = c.RemoteAddr().String() + "." + strconv.Itoa(dupFD)
+			gc = newStreamConn("unix", dupFD, el, sockAddr, c.LocalAddr(), c.RemoteAddr())
+		case *net.TCPConn:
+			sockAddr, _, _, _, err = socket.GetTCPSockAddr(c.RemoteAddr().Network(), c.RemoteAddr().String())
+			if err != nil {
+				resCh <- RegisteredResult{Err: err}
+				return
+			}
+			gc = newStreamConn("tcp", dupFD, el, sockAddr, c.LocalAddr(), c.RemoteAddr())
+		case *net.UDPConn:
+			sockAddr, _, _, _, err = socket.GetUDPSockAddr(c.RemoteAddr().Network(), c.RemoteAddr().String())
+			if err != nil {
+				resCh <- RegisteredResult{Err: err}
+				return
+			}
+			gc = newUDPConn(dupFD, el, c.LocalAddr(), sockAddr, true)
+		default:
+			resCh <- RegisteredResult{Err: fmt.Errorf("unknown type of conn: %T", c)}
+			return
+		}
+
+		gc.ctx = ctx
+
+		connOpened := make(chan struct{})
+		ccb := &connWithCallback{c: gc, cb: func() {
+			close(connOpened)
+		}}
+		if err := el.poller.Trigger(queue.LowPriority, el.register, ccb); err != nil {
+			gc.Close() //nolint:errcheck
+			resCh <- RegisteredResult{Err: err}
+			return
+		}
+		<-connOpened
+
+		resCh <- RegisteredResult{Conn: gc}
+	})
+	return
 }
 
 func (el *eventloop) register(a any) error {
@@ -239,11 +374,11 @@ func (el *eventloop) close(c *conn, err error) error {
 		if len(iov) > iovMax {
 			iov = iov[:iovMax]
 		}
-		if n, e := gio.Writev(c.fd, iov); e != nil {
+		n, err := gio.Writev(c.fd, iov)
+		if err != nil {
 			break
-		} else { //nolint:revive
-			_, _ = c.outboundBuffer.Discard(n)
 		}
+		_, _ = c.outboundBuffer.Discard(n)
 	}
 
 	c.release()
