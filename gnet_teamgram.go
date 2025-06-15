@@ -7,8 +7,8 @@
 package gnet
 
 import (
-	"github.com/panjf2000/gnet/v2/internal/queue"
 	"github.com/panjf2000/gnet/v2/pkg/errors"
+	"github.com/panjf2000/gnet/v2/pkg/queue"
 )
 
 // AsyncWrite - AsyncWrite
