@@ -158,6 +158,12 @@ func (c *conn) write(data []byte) (n int, err error) {
 		return
 	}
 
+	defer func() {
+		if err != nil {
+			_ = c.loop.close(c, os.NewSyscallError("write", err))
+		}
+	}()
+
 	var sent int
 loop:
 	if sent, err = unix.Write(c.fd, data); err != nil {
@@ -166,11 +172,11 @@ loop:
 		if err == unix.EAGAIN {
 			_, err = c.outboundBuffer.Write(data)
 			if !isET {
-				err = c.loop.poller.ModReadWrite(&c.pollAttachment, false)
+				err = c.loop.poller.ModReadWrite(&c.pollAttachment, isET)
 			}
 			return
 		}
-		return 0, c.loop.close(c, os.NewSyscallError("write", err))
+		return 0, err
 	}
 	data = data[sent:]
 	if isET && len(data) > 0 {
@@ -179,7 +185,7 @@ loop:
 	// Failed to send all data back to the remote, buffer the leftover data for the next round.
 	if len(data) > 0 {
 		_, _ = c.outboundBuffer.Write(data)
-		err = c.loop.poller.ModReadWrite(&c.pollAttachment, false)
+		err = c.loop.poller.ModReadWrite(&c.pollAttachment, isET)
 	}
 
 	return
@@ -201,6 +207,12 @@ func (c *conn) writev(bs [][]byte) (n int, err error) {
 		return
 	}
 
+	defer func() {
+		if err != nil {
+			_ = c.loop.close(c, os.NewSyscallError("writev", err))
+		}
+	}()
+
 	remaining := n
 	var sent int
 loop:
@@ -210,11 +222,11 @@ loop:
 		if err == unix.EAGAIN {
 			_, err = c.outboundBuffer.Writev(bs)
 			if !isET {
-				err = c.loop.poller.ModReadWrite(&c.pollAttachment, false)
+				err = c.loop.poller.ModReadWrite(&c.pollAttachment, isET)
 			}
 			return
 		}
-		return 0, c.loop.close(c, os.NewSyscallError("writev", err))
+		return 0, err
 	}
 	pos := len(bs)
 	if remaining -= sent; remaining > 0 {
@@ -236,7 +248,7 @@ loop:
 	// Failed to send all data back to the remote, buffer the leftover data for the next round.
 	if remaining > 0 {
 		_, _ = c.outboundBuffer.Writev(bs)
-		err = c.loop.poller.ModReadWrite(&c.pollAttachment, false)
+		err = c.loop.poller.ModReadWrite(&c.pollAttachment, isET)
 	}
 
 	return
