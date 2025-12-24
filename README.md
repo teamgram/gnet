@@ -35,7 +35,7 @@ English | [中文](README_ZH.md)
 
 # 🚀 Features
 
-## 🦖 Milestone
+## 🦖 Milestones
 
 - [x] [High-performance](#-performance) event-driven looping based on a networking model of multiple threads/goroutines
 - [x] Built-in goroutine pool powered by the library [ants](https://github.com/panjf2000/ants)
@@ -164,9 +164,9 @@ To see the full ranking list, visit [TechEmpower Benchmark **Round 22**](https:/
 
 ## Contrasts to the similar networking libraries
 
-## On Linux (epoll)
+### On Linux (epoll)
 
-### Test Environment
+#### Environment
 
 ```bash
 # Machine information
@@ -184,15 +184,13 @@ Packet size     : 512/1024/2048/4096/8192/16384/32768/65536 bytes
 Test duration   : 15s
 ```
 
-#### [Echo benchmark](https://github.com/gnet-io/gnet-benchmarks)
+[![](https://github.com/panjf2000/gnet_benchmarks/raw/master/results/echo_conn_linux.png)](https://github.com/gnet-io/gnet-benchmarks)
 
-![](https://github.com/panjf2000/gnet_benchmarks/raw/master/results/echo_conn_linux.png)
+[![](https://github.com/panjf2000/gnet_benchmarks/raw/master/results/echo_packet_linux.png)]((https://github.com/gnet-io/gnet-benchmarks))
 
-![](https://github.com/panjf2000/gnet_benchmarks/raw/master/results/echo_packet_linux.png)
+### On MacOS (kqueue)
 
-## On MacOS (kqueue)
-
-### Test Environment
+#### Environment
 
 ```bash
 # Machine information
@@ -210,11 +208,13 @@ Packet size     : 512/1024/2048/4096/8192 bytes
 Test duration   : 15s
 ```
 
-#### [Echo benchmark](https://github.com/gnet-io/gnet-benchmarks)
+[![](https://github.com/panjf2000/gnet_benchmarks/raw/master/results/echo_conn_macos.png)]((https://github.com/gnet-io/gnet-benchmarks))
 
-![](https://github.com/panjf2000/gnet_benchmarks/raw/master/results/echo_conn_macos.png)
+[![](https://github.com/panjf2000/gnet_benchmarks/raw/master/results/echo_packet_macos.png)]((https://github.com/gnet-io/gnet-benchmarks))
 
-![](https://github.com/panjf2000/gnet_benchmarks/raw/master/results/echo_packet_macos.png)
+### Combat with Rust
+
+[![](https://res.strikefreedom.top/static_res/blog/figures/Gjfx2GoXAAA5haW.jpeg)](https://www.youtube.com/watch?v=31R8Ef9A0iw)
 
 # ⚠️ License
 
@@ -236,25 +236,31 @@ Please read the [Contributing Guidelines](CONTRIBUTING.md) before opening a PR a
 - [gnet: 一个轻量级且高性能的 Golang 网络库](https://strikefreedom.top/go-event-loop-networking-library-gnet)
 - [最快的 Go 网络框架 gnet 来啦！](https://strikefreedom.top/releasing-gnet-v1-with-techempower)
 
-# 💰 Backers
-
-Support us with a monthly donation and help us continue our activities.
-
-<a href="https://opencollective.com/gnet#backers" target="_blank"><img src="https://opencollective.com/gnet/backers.svg"></a>
-
-# 💎 Sponsors
-
-Become a bronze sponsor with a monthly donation of $10 and get your logo on our README on GitHub.
-
-<a href="https://opencollective.com/gnet#sponsors" target="_blank"><img src="https://opencollective.com/gnet/sponsors.svg"></a>
-
 # ☕️ Buy me a coffee
 
 > Please be sure to leave your name, GitHub account, or other social media accounts when you donate by the following means so that I can add it to the list of donors as a token of my appreciation.
 
-<img src="https://raw.githubusercontent.com/panjf2000/illustrations/master/payments/WeChatPay.JPG" width="250" align="middle"/>&nbsp;&nbsp;
-<img src="https://raw.githubusercontent.com/panjf2000/illustrations/master/payments/AliPay.JPG" width="250" align="middle"/>&nbsp;&nbsp;
-<a href="https://www.paypal.me/R136a1X" target="_blank"><img src="https://raw.githubusercontent.com/panjf2000/illustrations/master/payments/PayPal.JPG" width="250" align="middle"/></a>&nbsp;&nbsp;
+<table>
+  <tbody>
+    <tr>
+      <td align="center" valign="middle">
+        <a target="_blank" href="https://buymeacoffee.com/panjf2000">
+          <img src="https://res.strikefreedom.top/static_res/logos/bmc_qr.png" width="250" alt="By me coffee" />
+        </a>
+      </td>
+      <td align="center" valign="middle">
+        <a target="_blank" href="https://www.patreon.com/panjf2000">
+          <img src="https://res.strikefreedom.top/static_res/logos/patreon_logo.png" width="250" alt="Patreon" />
+        </a>
+      </td>
+      <td align="center" valign="middle">
+        <a target="_blank" href="https://opencollective.com/panjf2000">
+          <img src="https://res.strikefreedom.top/static_res/logos/open-collective-logo.png" width="250" alt="OpenCollective" />
+        </a>
+      </td>
+    </tr>
+  </tbody>
+</table>
 
 # 🔑 JetBrains OS licenses
 

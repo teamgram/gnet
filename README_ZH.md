@@ -35,7 +35,7 @@
 
 # 🚀 功能
 
-## 🦖 当前支持
+## 🦖 里程碑
 
 - [x] 基于多线程/协程网络模型的[高性能](#-性能测试)事件驱动循环
 - [x] 内置 goroutine 池，由开源库 [ants](https://github.com/panjf2000/ants) 提供支持
@@ -51,7 +51,7 @@
 - [x] 多网络地址绑定
 - [x] 支持注册新的连接到事件循环
 
-## 🕊 未来计划
+## 🕊 蓝图
 
 - [ ] 支持 **TLS**
 - [ ] 支持 [io_uring](https://github.com/axboe/liburing/wiki/io_uring-and-networking-in-2023)
@@ -164,9 +164,9 @@ go get -u github.com/panjf2000/gnet
 
 ## 同类型的网络库性能对比
 
-## On Linux (epoll)
+### On Linux (epoll)
 
-### Test Environment
+#### Environment
 
 ```bash
 # Machine information
@@ -184,15 +184,13 @@ Packet size     : 512/1024/2048/4096/8192/16384/32768/65536 bytes
 Test duration   : 15s
 ```
 
-#### [Echo benchmark](https://github.com/gnet-io/gnet-benchmarks)
+[![](https://github.com/panjf2000/gnet_benchmarks/raw/master/results/echo_conn_linux.png)](https://github.com/gnet-io/gnet-benchmarks)
 
-![](https://github.com/panjf2000/gnet_benchmarks/raw/master/results/echo_conn_linux.png)
+[![](https://github.com/panjf2000/gnet_benchmarks/raw/master/results/echo_packet_linux.png)]((https://github.com/gnet-io/gnet-benchmarks))
 
-![](https://github.com/panjf2000/gnet_benchmarks/raw/master/results/echo_packet_linux.png)
+### On MacOS (kqueue)
 
-## On MacOS (kqueue)
-
-### Test Environment
+#### Environment
 
 ```bash
 # Machine information
@@ -210,11 +208,13 @@ Packet size     : 512/1024/2048/4096/8192 bytes
 Test duration   : 15s
 ```
 
-#### [Echo benchmark](https://github.com/gnet-io/gnet-benchmarks)
+[![](https://github.com/panjf2000/gnet_benchmarks/raw/master/results/echo_conn_macos.png)]((https://github.com/gnet-io/gnet-benchmarks))
 
-![](https://github.com/panjf2000/gnet_benchmarks/raw/master/results/echo_conn_macos.png)
+[![](https://github.com/panjf2000/gnet_benchmarks/raw/master/results/echo_packet_macos.png)]((https://github.com/gnet-io/gnet-benchmarks))
 
-![](https://github.com/panjf2000/gnet_benchmarks/raw/master/results/echo_packet_macos.png)
+### "硬刚" Rust
+
+[![](https://res.strikefreedom.top/static_res/blog/figures/Gjfx2GoXAAA5haW.jpeg)](https://www.youtube.com/watch?v=31R8Ef9A0iw)
 
 # ⚠️ 证书
 
@@ -236,25 +236,31 @@ Test duration   : 15s
 - [gnet: 一个轻量级且高性能的 Golang 网络库](https://strikefreedom.top/go-event-loop-networking-library-gnet)
 - [最快的 Go 网络框架 gnet 来啦！](https://strikefreedom.top/releasing-gnet-v1-with-techempower)
 
-# 💰 支持
-
-如果有意向，可以通过每个月定量的少许捐赠来支持这个项目。
-
-<a href="https://opencollective.com/gnet#backers" target="_blank"><img src="https://opencollective.com/gnet/backers.svg"></a>
-
-# 💎 赞助
-
-每月定量捐赠 10 刀即可成为本项目的赞助者，届时您的 logo 或者 link 可以展示在本项目的 README 上。
-
-<a href="https://opencollective.com/gnet#sponsors" target="_blank"><img src="https://opencollective.com/gnet/sponsors.svg"></a>
-
 # ☕️ 打赏
 
 > 当您通过以下方式进行捐赠时，请务必留下姓名、GitHub 账号或其他社交媒体账号，以便我将其添加到捐赠者名单中，以表谢意。
 
-<img src="https://raw.githubusercontent.com/panjf2000/illustrations/master/payments/WeChatPay.JPG" width="250" align="middle"/>&nbsp;&nbsp;
-<img src="https://raw.githubusercontent.com/panjf2000/illustrations/master/payments/AliPay.JPG" width="250" align="middle"/>&nbsp;&nbsp;
-<a href="https://www.paypal.me/R136a1X" target="_blank"><img src="https://raw.githubusercontent.com/panjf2000/illustrations/master/payments/PayPal.JPG" width="250" align="middle"/></a>&nbsp;&nbsp;
+<table>
+  <tbody>
+    <tr>
+      <td align="center" valign="middle">
+        <a target="_blank" href="https://buymeacoffee.com/panjf2000">
+          <img src="https://res.strikefreedom.top/static_res/logos/bmc_qr.png" width="250" alt="By me coffee" />
+        </a>
+      </td>
+      <td align="center" valign="middle">
+        <a target="_blank" href="https://www.patreon.com/panjf2000">
+          <img src="https://res.strikefreedom.top/static_res/logos/patreon_logo.png" width="250" alt="Patreon" />
+        </a>
+      </td>
+      <td align="center" valign="middle">
+        <a target="_blank" href="https://opencollective.com/panjf2000">
+          <img src="https://res.strikefreedom.top/static_res/logos/open-collective-logo.png" width="250" alt="OpenCollective" />
+        </a>
+      </td>
+    </tr>
+  </tbody>
+</table>
 
 # 🔑 JetBrains 开源证书支持
 
